@@ -45,14 +45,12 @@ jobs:
           grep -q '48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201' "Translator Mode/lib/core/model_constants.dart"
           grep -q '<|im_start|>assistant' "Translator Mode/lib/core/translation_prompt_renderer.dart"
           grep -q "Dual Translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "Ready to translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "Eb Translator" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "Speech Recognition" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "Speech Synthesys" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "ebTranslatorProgress" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "speechRecognitionProgress" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "speechSynthesysProgress" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "version: 1.1.2+7" "Translator Mode/pubspec.yaml"
+          grep -q "Install one at a time" "Translator Mode/lib/screens/dual_translator_screen.dart"
+          grep -q "installEbTranslator" "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q "installSpeechRecognition" "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q "installSpeechSynthesys" "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q "never chains all three downloads" "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q "version: 1.1.3+8" "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -88,27 +86,27 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.2-apk
+          name: dual-translate-v0.2.3-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.2.apk
-          sha256sum dual-translate-v0.2.2.apk > dual-translate-v0.2.2.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.3.apk
+          sha256sum dual-translate-v0.2.3.apk > dual-translate-v0.2.3.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.2"
+          TAG="translator-mode-v0.2.3"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.2.apk \
-            dual-translate-v0.2.2.apk.sha256 \
+            dual-translate-v0.2.3.apk \
+            dual-translate-v0.2.3.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.2" \
-            --notes "Model setup UI now tracks three independent horizontal downloads: Eb Translator, Speech Recognition, and Speech Synthesys. Each row has its own percentage and Pending/Downloading/Verifying/Ready/Error state. The misleading 62% + 32% + 6% weighted setup bar was removed; overall setup progress is now the simple average of the three model progress values. Existing responsive Dual Translate UI, local pipeline, memory-safe runtime lifecycle, hardened Android host, and pinned SmolLM2 model are retained."
+            --title "Dual Translate v0.2.3" \
+            --notes "Model installation is now fully separated. Eb Translator, Speech Recognition, and Speech Synthesys each have their own Install/Resume/Retry control and independent progress/status. Only one installer can run at a time and there is no automatic hand-off to the next model. Completed models remain detected as Ready after app restart, while microphone/play stay disabled until all three models are installed. The existing responsive UI, memory-safe runtime lifecycle, hardened Android host, and pinned SmolLM2 model are retained."
