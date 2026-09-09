@@ -36,6 +36,7 @@ class TranslatorController extends ChangeNotifier {
   bool preparing = false;
   bool generating = false;
   bool autoSpeak = true;
+  bool medicalMode = true;
   double setupProgress = 0;
   String setupStatus = 'Checking local models…';
   String liveTranscript = '';
@@ -45,6 +46,15 @@ class TranslatorController extends ChangeNotifier {
 
   final List<TranslationTurn> _history = [];
   List<TranslationTurn> get history => List.unmodifiable(_history);
+
+  bool get busy => preparing || generating || listeningSide != null;
+
+  TranslationSide? get lastOutputSide {
+    if (_history.isEmpty) return null;
+    return _history.first.sourceSide == TranslationSide.a
+        ? TranslationSide.b
+        : TranslationSide.a;
+  }
 
   Future<void> initialize() async {
     try {
@@ -67,6 +77,7 @@ class TranslatorController extends ChangeNotifier {
       notifyListeners();
     } catch (e) {
       error = e.toString();
+      setupStatus = 'Model check failed';
       notifyListeners();
     }
   }
@@ -102,13 +113,13 @@ class TranslatorController extends ChangeNotifier {
         notifyListeners();
       });
 
-      // Do not initialize any native engine here. The setup phase is strictly
-      // download-only to avoid loading STT + TTS + Eb Translator at the same time.
+      // Download-only setup avoids a native-memory spike during first launch.
       ready = true;
       setupProgress = 1;
       setupStatus = 'Offline models ready';
     } catch (e) {
       error = e.toString();
+      setupStatus = 'Setup interrupted — tap retry';
     } finally {
       preparing = false;
       notifyListeners();
@@ -156,8 +167,14 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void setMedicalMode(bool value) {
+    if (listeningSide != null || generating) return;
+    medicalMode = value;
+    notifyListeners();
+  }
+
   Future<void> toggleListening(TranslationSide side) async {
-    if (!ready || generating) return;
+    if (!ready || generating || preparing) return;
     error = null;
 
     try {
@@ -169,8 +186,7 @@ class TranslatorController extends ChangeNotifier {
         await stopListening(submitTranscript: false);
       }
 
-      // Memory-safe mode: release Eb Translator/Speech Synthesys before
-      // bringing up Speech Recognition.
+      // Keep only one heavy native engine resident at a time.
       await _translator.dispose();
       await _tts.releaseRuntime();
 
@@ -207,7 +223,6 @@ class TranslatorController extends ChangeNotifier {
     final text = liveTranscript.trim();
     liveTranscript = '';
 
-    // Fully release Speech Recognition before loading Eb Translator.
     await _stt.releaseRuntime();
     setupStatus = 'Offline models ready';
     notifyListeners();
@@ -219,7 +234,7 @@ class TranslatorController extends ChangeNotifier {
 
   Future<void> translate(TranslationSide sourceSide, String rawText) async {
     final text = rawText.trim();
-    if (!ready || text.isEmpty || generating) return;
+    if (!ready || text.isEmpty || generating || preparing) return;
     if (listeningSide != null) {
       await stopListening(submitTranscript: false);
     }
@@ -245,7 +260,6 @@ class TranslatorController extends ChangeNotifier {
 
     var answer = '';
     try {
-      // Ensure only Eb Translator is resident while translating.
       await _stt.releaseRuntime();
       await _tts.releaseRuntime();
       final artifact = await _requireArtifact();
@@ -253,13 +267,14 @@ class TranslatorController extends ChangeNotifier {
         await _translator.load(artifact);
       }
 
-      setupStatus = 'Translating';
+      setupStatus = medicalMode ? 'Translating · Medical' : 'Translating';
       notifyListeners();
 
       await for (final token in _translator.translate(
         source: source,
         target: target,
         text: text,
+        medicalMode: medicalMode,
       )) {
         answer += token;
         if (sourceSide == TranslationSide.a) {
@@ -271,6 +286,10 @@ class TranslatorController extends ChangeNotifier {
       }
 
       answer = answer.trim();
+      if (answer.isEmpty) {
+        throw StateError('Eb Translator returned an empty translation.');
+      }
+
       if (sourceSide == TranslationSide.a) {
         textB = answer;
       } else {
@@ -288,12 +307,9 @@ class TranslatorController extends ChangeNotifier {
       );
       notifyListeners();
 
-      if (autoSpeak && answer.isNotEmpty) {
+      if (autoSpeak) {
         setupStatus = 'Preparing Speech Synthesys…';
         notifyListeners();
-
-        // Free Eb Translator before initializing Speech Synthesys. This costs a
-        // reload on the next turn but keeps peak RAM much lower on mobile.
         await _translator.dispose();
         await _tts.speak(answer, language: target.ttsCode);
       }
@@ -313,11 +329,16 @@ class TranslatorController extends ChangeNotifier {
     if (text.trim().isEmpty) return;
 
     try {
+      error = null;
+      setupStatus = 'Preparing Speech Synthesys…';
+      notifyListeners();
       await _stt.releaseRuntime();
       await _translator.dispose();
       await _tts.speak(text, language: language.ttsCode);
+      setupStatus = 'Offline models ready';
     } catch (e) {
       error = e.toString();
+      setupStatus = 'Offline models ready';
       notifyListeners();
     }
   }
@@ -330,12 +351,18 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  void clearError() {
+    error = null;
+    notifyListeners();
+  }
+
   void clearConversation() {
     if (listeningSide != null || generating) return;
     textA = '';
     textB = '';
     liveTranscript = '';
     _history.clear();
+    error = null;
     notifyListeners();
   }
 
