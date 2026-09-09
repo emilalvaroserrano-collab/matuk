@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 
 import '../controllers/translator_controller.dart';
-import '../models/translation_language.dart';
 import '../models/translation_turn.dart';
 import '../widgets/language_panel.dart';
 import '../widgets/setup_card.dart';
@@ -148,7 +147,8 @@ class _TranslatorBody extends StatelessWidget {
                 )
               : ListView.separated(
                   itemCount: controller.history.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
+                  separatorBuilder: (context, index) =>
+                      const SizedBox(height: 8),
                   itemBuilder: (context, index) {
                     final turn = controller.history[index];
                     return _HistoryCard(turn: turn);
