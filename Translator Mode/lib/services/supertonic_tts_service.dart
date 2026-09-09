@@ -39,6 +39,8 @@ class SupertonicTtsService {
     return true;
   }
 
+  /// First-run setup is download-only. Native TTS initialization is deferred
+  /// until audio is actually requested, avoiding a large setup memory spike.
   Future<void> prepare({
     required void Function(int done, int total, String file, double progress)
         onProgress,
@@ -64,8 +66,6 @@ class SupertonicTtsService {
       done += 1;
       onProgress(done, _files.length, name, 1);
     }
-
-    await initialize();
   }
 
   Future<void> _downloadFile(
@@ -76,7 +76,10 @@ class SupertonicTtsService {
     final part = File('${target.path}.part');
     if (await part.exists()) await part.delete();
 
-    final request = http.Request('GET', Uri.parse('$_modelBase/$name?download=true'));
+    final request = http.Request(
+      'GET',
+      Uri.parse('$_modelBase/$name?download=true'),
+    );
     final response = await _client.send(request);
     if (response.statusCode != HttpStatus.ok) {
       throw HttpException(
@@ -172,11 +175,19 @@ class SupertonicTtsService {
 
   Future<void> stop() => _player.stop();
 
-  void dispose() {
-    _player.dispose();
+  /// Frees the native TTS model while retaining downloaded model files.
+  Future<void> releaseRuntime() async {
+    await _player.stop();
     _tts?.free();
     _tts = null;
     _initialized = false;
+  }
+
+  void dispose() {
+    _tts?.free();
+    _tts = null;
+    _initialized = false;
+    _player.dispose();
     _client.close();
   }
 }
