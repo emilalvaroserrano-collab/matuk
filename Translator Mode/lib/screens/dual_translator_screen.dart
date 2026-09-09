@@ -5,7 +5,6 @@ import 'package:flutter/services.dart';
 
 import '../controllers/translator_controller.dart';
 import '../models/translation_language.dart';
-import '../models/translation_turn.dart';
 
 class DualTranslatorScreen extends StatefulWidget {
   const DualTranslatorScreen({super.key, required this.controller});
@@ -18,23 +17,27 @@ class DualTranslatorScreen extends StatefulWidget {
 
 class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
   TranslationSide _activeSide = TranslationSide.a;
-
   TranslatorController get controller => widget.controller;
 
   Future<void> _toggleMic() async {
     if (!controller.ready) {
-      await controller.prepareOfflineModels();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Install Eb Translator, Speech Recognition, and Speech Synthesys first.',
+          ),
+        ),
+      );
       return;
     }
     if (controller.generating) {
       await controller.stopGeneration();
       return;
     }
-
     final stopping = controller.listeningSide == _activeSide;
     await controller.toggleListening(_activeSide);
     if (!mounted) return;
-
     if (stopping && controller.listeningSide == null && controller.error == null) {
       setState(() {
         _activeSide = _activeSide == TranslationSide.a
@@ -81,7 +84,7 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
             borderRadius: BorderRadius.circular(28),
           ),
           child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 620, maxHeight: 820),
+            constraints: const BoxConstraints(maxWidth: 640, maxHeight: 860),
             child: AnimatedBuilder(
               animation: controller,
               builder: (context, _) => _SettingsPanel(
@@ -106,7 +109,7 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
         borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
       ),
       builder: (context) => FractionallySizedBox(
-        heightFactor: 0.94,
+        heightFactor: 0.95,
         child: AnimatedBuilder(
           animation: controller,
           builder: (context, _) => _SettingsPanel(
@@ -162,7 +165,6 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
 
 class _Header extends StatelessWidget {
   const _Header({required this.onSettings});
-
   final VoidCallback onSettings;
 
   @override
@@ -225,7 +227,6 @@ class _HomeStage extends StatelessWidget {
     required this.activeSide,
     required this.onSideChanged,
   });
-
   final TranslatorController controller;
   final TranslationSide activeSide;
   final ValueChanged<TranslationSide> onSideChanged;
@@ -238,7 +239,6 @@ class _HomeStage extends StatelessWidget {
         final hasText = controller.textA.trim().isNotEmpty ||
             controller.textB.trim().isNotEmpty ||
             controller.history.isNotEmpty;
-
         return SingleChildScrollView(
           padding: EdgeInsets.fromLTRB(
             tablet ? 42 : 22,
@@ -275,7 +275,7 @@ class _HomeStage extends StatelessWidget {
                     ),
                     const SizedBox(height: 16),
                     ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 610),
+                      constraints: const BoxConstraints(maxWidth: 620),
                       child: Text(
                         _helper,
                         textAlign: TextAlign.center,
@@ -286,18 +286,13 @@ class _HomeStage extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (controller.preparing || !controller.ready) ...[
+                    if (!controller.ready || controller.preparing) ...[
                       const SizedBox(height: 26),
-                      _DownloadProgressGroup(controller: controller),
+                      _IndependentModelInstaller(controller: controller),
                     ],
                     if (controller.error != null) ...[
-                      const SizedBox(height: 20),
-                      _ErrorCard(
-                        message: controller.error!,
-                        onRetry: controller.ready
-                            ? null
-                            : controller.prepareOfflineModels,
-                      ),
+                      const SizedBox(height: 18),
+                      _ErrorCard(message: controller.error!),
                     ],
                     if (hasText) ...[
                       const SizedBox(height: 28),
@@ -314,18 +309,24 @@ class _HomeStage extends StatelessWidget {
   }
 
   String get _title {
-    if (controller.preparing) return 'Preparing translator';
+    if (controller.installingEbTranslator) return 'Installing Eb Translator';
+    if (controller.installingSpeechRecognition) {
+      return 'Installing Speech Recognition';
+    }
+    if (controller.installingSpeechSynthesys) {
+      return 'Installing Speech Synthesys';
+    }
     if (controller.listeningSide != null) return 'Listening';
     if (controller.generating) return 'Translating';
-    return 'Ready to translate';
+    return controller.ready ? 'Ready to translate' : 'Install local models';
   }
 
   String get _helper {
     if (controller.preparing) {
-      return 'Each on-device model is tracked separately below so you can see exactly what is downloading.';
+      return 'Only one model is installing. Let it finish, then install the next model separately.';
     }
     if (!controller.ready) {
-      return 'Tap play to download the three local models. Translation works fully offline afterward.';
+      return 'Install the three on-device models separately below. Completed models stay installed when you close or reopen the app.';
     }
     if (controller.listeningSide != null) {
       return 'Tap the microphone again when the sentence is complete.';
@@ -343,7 +344,6 @@ class _LanguagePair extends StatelessWidget {
     required this.activeSide,
     required this.onSideChanged,
   });
-
   final TranslatorController controller;
   final TranslationSide activeSide;
   final ValueChanged<TranslationSide> onSideChanged;
@@ -368,7 +368,6 @@ class _LanguagePair extends StatelessWidget {
         ),
       );
     }
-
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -387,21 +386,19 @@ class _LanguagePair extends StatelessWidget {
   }
 }
 
-class _DownloadProgressGroup extends StatelessWidget {
-  const _DownloadProgressGroup({required this.controller});
-
+class _IndependentModelInstaller extends StatelessWidget {
+  const _IndependentModelInstaller({required this.controller});
   final TranslatorController controller;
 
   @override
   Widget build(BuildContext context) {
-    final readyCount = <double>[
-      controller.ebTranslatorProgress,
-      controller.speechRecognitionProgress,
-      controller.speechSynthesysProgress,
-    ].where((p) => p >= 0.999).length;
-
+    final readyCount = <String>[
+      controller.ebTranslatorStatus,
+      controller.speechRecognitionStatus,
+      controller.speechSynthesysStatus,
+    ].where((status) => status == 'Ready').length;
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 650),
+      constraints: const BoxConstraints(maxWidth: 660),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
@@ -417,11 +414,11 @@ class _DownloadProgressGroup extends StatelessWidget {
               children: [
                 const Expanded(
                   child: Text(
-                    'ON-DEVICE MODELS',
+                    'INSTALL ON-DEVICE MODELS',
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
-                      letterSpacing: 1.4,
+                      letterSpacing: 1.35,
                     ),
                   ),
                 ),
@@ -433,23 +430,44 @@ class _DownloadProgressGroup extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 17),
-            _ModelProgressRow(
+            const SizedBox(height: 8),
+            Text(
+              'Install one at a time. There is no automatic chain between models.',
+              style: TextStyle(
+                fontSize: 13,
+                height: 1.4,
+                color: Colors.white.withValues(alpha: 0.44),
+              ),
+            ),
+            const SizedBox(height: 18),
+            _InstallModelRow(
               label: 'Eb Translator',
               progress: controller.ebTranslatorProgress,
               status: controller.ebTranslatorStatus,
+              installing: controller.installingEbTranslator,
+              anotherInstalling:
+                  controller.preparing && !controller.installingEbTranslator,
+              onInstall: controller.installEbTranslator,
             ),
-            const SizedBox(height: 17),
-            _ModelProgressRow(
+            const SizedBox(height: 18),
+            _InstallModelRow(
               label: 'Speech Recognition',
               progress: controller.speechRecognitionProgress,
               status: controller.speechRecognitionStatus,
+              installing: controller.installingSpeechRecognition,
+              anotherInstalling: controller.preparing &&
+                  !controller.installingSpeechRecognition,
+              onInstall: controller.installSpeechRecognition,
             ),
-            const SizedBox(height: 17),
-            _ModelProgressRow(
+            const SizedBox(height: 18),
+            _InstallModelRow(
               label: 'Speech Synthesys',
               progress: controller.speechSynthesysProgress,
               status: controller.speechSynthesysStatus,
+              installing: controller.installingSpeechSynthesys,
+              anotherInstalling:
+                  controller.preparing && !controller.installingSpeechSynthesys,
+              onInstall: controller.installSpeechSynthesys,
             ),
             const SizedBox(height: 14),
             Text(
@@ -466,59 +484,92 @@ class _DownloadProgressGroup extends StatelessWidget {
   }
 }
 
-class _ModelProgressRow extends StatelessWidget {
-  const _ModelProgressRow({
+class _InstallModelRow extends StatelessWidget {
+  const _InstallModelRow({
     required this.label,
     required this.progress,
     required this.status,
+    required this.installing,
+    required this.anotherInstalling,
+    required this.onInstall,
   });
-
   final String label;
   final double progress;
   final String status;
+  final bool installing;
+  final bool anotherInstalling;
+  final Future<void> Function() onInstall;
 
   @override
   Widget build(BuildContext context) {
     final p = progress.clamp(0.0, 1.0);
-    final complete = p >= 0.999 && status == 'Ready';
-
+    final ready = status == 'Ready' && p >= 0.999;
+    final isError = status == 'Error';
+    final actionLabel = isError
+        ? 'Retry'
+        : p > 0
+            ? 'Resume'
+            : 'Install';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
             Expanded(
-              child: Text(
-                label,
-                style: const TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    label,
+                    style: const TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    installing ? 'Installing…' : status,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      color: isError
+                          ? Theme.of(context).colorScheme.error
+                          : Colors.white.withValues(alpha: 0.48),
+                    ),
+                  ),
+                ],
               ),
             ),
-            if (complete)
-              const Icon(Icons.check_circle_rounded, size: 17)
+            const SizedBox(width: 10),
+            if (installing)
+              const SizedBox(
+                width: 22,
+                height: 22,
+                child: CircularProgressIndicator(strokeWidth: 2.2),
+              )
+            else if (ready)
+              const Icon(Icons.check_circle_rounded, size: 22)
             else
-              Text(
-                '${(p * 100).toStringAsFixed(0)}%',
-                style: TextStyle(
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white.withValues(alpha: 0.68),
-                ),
+              OutlinedButton(
+                onPressed: anotherInstalling ? null : () => onInstall(),
+                child: Text(actionLabel),
               ),
           ],
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 9),
         ClipRRect(
           borderRadius: BorderRadius.circular(999),
           child: LinearProgressIndicator(value: p, minHeight: 5),
         ),
         const SizedBox(height: 6),
-        Text(
-          status,
-          style: TextStyle(
-            fontSize: 12.5,
-            color: Colors.white.withValues(alpha: 0.48),
+        Align(
+          alignment: Alignment.centerRight,
+          child: Text(
+            '${(p * 100).toStringAsFixed(0)}%',
+            style: TextStyle(
+              fontSize: 12.5,
+              fontWeight: FontWeight.w600,
+              color: Colors.white.withValues(alpha: 0.56),
+            ),
           ),
         ),
       ],
@@ -528,14 +579,11 @@ class _ModelProgressRow extends StatelessWidget {
 
 class _LiveConversation extends StatelessWidget {
   const _LiveConversation({required this.controller});
-
   final TranslatorController controller;
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final wide = width >= 720;
-
+    final wide = MediaQuery.sizeOf(context).width >= 720;
     Widget card(String title, String text, IconData icon) {
       return Container(
         width: double.infinity,
@@ -575,7 +623,6 @@ class _LiveConversation extends StatelessWidget {
         ),
       );
     }
-
     final first = card(
       controller.languageA.displayName,
       controller.textA,
@@ -586,7 +633,6 @@ class _LiveConversation extends StatelessWidget {
       controller.textB,
       Icons.volume_up_outlined,
     );
-
     return Column(
       children: [
         if (wide)
@@ -620,7 +666,6 @@ class _BottomControls extends StatelessWidget {
     required this.onReset,
     required this.onPlay,
   });
-
   final TranslatorController controller;
   final VoidCallback onMic;
   final VoidCallback onSpeaker;
@@ -629,10 +674,9 @@ class _BottomControls extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 420;
+    final compact = MediaQuery.sizeOf(context).width < 420;
     final replayEnabled = controller.lastOutputSide != null;
-
+    final sessionEnabled = controller.ready && !controller.preparing;
     return SafeArea(
       top: false,
       child: Padding(
@@ -650,13 +694,13 @@ class _BottomControls extends StatelessWidget {
                     icon: controller.listeningSide != null
                         ? Icons.stop_rounded
                         : Icons.mic_rounded,
-                    enabled: !controller.generating && !controller.preparing,
+                    enabled: sessionEnabled && !controller.generating,
                     onPressed: onMic,
                   ),
                   const SizedBox(width: 8),
                   _ControlButton(
                     icon: Icons.volume_up_rounded,
-                    enabled: replayEnabled && !controller.preparing,
+                    enabled: replayEnabled && sessionEnabled,
                     onPressed: onSpeaker,
                   ),
                   const SizedBox(width: 8),
@@ -674,12 +718,10 @@ class _BottomControls extends StatelessWidget {
               padding: const EdgeInsets.all(9),
               decoration: _shellDecoration(),
               child: _ControlButton(
-                icon: !controller.ready
-                    ? Icons.download_rounded
-                    : controller.generating
-                        ? Icons.stop_rounded
-                        : Icons.play_arrow_rounded,
-                enabled: !controller.preparing,
+                icon: controller.generating
+                    ? Icons.stop_rounded
+                    : Icons.play_arrow_rounded,
+                enabled: sessionEnabled,
                 highlighted: true,
                 large: true,
                 onPressed: onPlay,
@@ -706,7 +748,6 @@ class _ControlButton extends StatelessWidget {
     this.highlighted = false,
     this.large = false,
   });
-
   final IconData icon;
   final bool enabled;
   final VoidCallback onPressed;
@@ -723,8 +764,9 @@ class _ControlButton extends StatelessWidget {
         onPressed: enabled ? onPressed : null,
         icon: Icon(icon, size: large ? 33 : 27),
         style: IconButton.styleFrom(
-          backgroundColor:
-              highlighted ? const Color(0xFF20272C) : const Color(0xFF1B1D20),
+          backgroundColor: highlighted
+              ? const Color(0xFF20272C)
+              : const Color(0xFF1B1D20),
           foregroundColor:
               Colors.white.withValues(alpha: enabled ? 0.66 : 0.25),
           disabledBackgroundColor: const Color(0xFF1B1D20),
@@ -738,15 +780,13 @@ class _ControlButton extends StatelessWidget {
 }
 
 class _ErrorCard extends StatelessWidget {
-  const _ErrorCard({required this.message, required this.onRetry});
-
+  const _ErrorCard({required this.message});
   final String message;
-  final VoidCallback? onRetry;
 
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 650),
+      constraints: const BoxConstraints(maxWidth: 660),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
@@ -762,8 +802,6 @@ class _ErrorCard extends StatelessWidget {
             const Icon(Icons.error_outline_rounded),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
-            if (onRetry != null)
-              TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -777,7 +815,6 @@ class _SettingsPanel extends StatelessWidget {
     required this.onClose,
     required this.onCopyHistory,
   });
-
   final TranslatorController controller;
   final VoidCallback onClose;
   final VoidCallback onCopyHistory;
@@ -869,19 +906,7 @@ class _SettingsPanel extends StatelessWidget {
                     controller.setMedicalMode(selection.first),
           ),
           const SizedBox(height: 28),
-          _DownloadProgressGroup(controller: controller),
-          const SizedBox(height: 12),
-          SizedBox(
-            width: double.infinity,
-            child: OutlinedButton.icon(
-              onPressed:
-                  controller.preparing ? null : controller.prepareOfflineModels,
-              icon: const Icon(Icons.download_rounded),
-              label: Text(
-                controller.ready ? 'Re-check models' : 'Download models',
-              ),
-            ),
-          ),
+          _IndependentModelInstaller(controller: controller),
           const SizedBox(height: 28),
           Row(
             children: [
@@ -942,7 +967,6 @@ class _LanguageDropdown extends StatelessWidget {
     required this.enabled,
     required this.onChanged,
   });
-
   final String label;
   final TranslationLanguage value;
   final bool enabled;
@@ -1001,7 +1025,6 @@ class _InfoBox extends StatelessWidget {
     required this.value,
     required this.icon,
   });
-
   final String label;
   final String value;
   final IconData icon;
@@ -1051,7 +1074,6 @@ class _InfoBox extends StatelessWidget {
 
 class _EburonBadge extends StatelessWidget {
   const _EburonBadge({required this.size});
-
   final double size;
 
   @override
@@ -1099,7 +1121,6 @@ class _EburonMarkPainter extends CustomPainter {
       ..strokeWidth = math.max(1.6, size.width * 0.033)
       ..strokeCap = StrokeCap.round
       ..strokeJoin = StrokeJoin.round;
-
     final w = size.width * 0.22;
     final h = size.height * 0.40;
     for (var i = 0; i < 3; i++) {
@@ -1114,7 +1135,6 @@ class _EburonMarkPainter extends CustomPainter {
       canvas.drawOval(rect, stroke);
       canvas.restore();
     }
-
     canvas.drawCircle(center, size.width * 0.09, stroke);
   }
 
