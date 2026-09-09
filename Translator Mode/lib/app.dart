@@ -33,7 +33,7 @@ class _TranslatorModeAppState extends State<TranslatorModeApp> {
   Widget build(BuildContext context) {
     return MaterialApp(
       debugShowCheckedModeBanner: false,
-      title: 'Translator Mode',
+      title: 'Dual Translate',
       theme: AppTheme.dark(),
       home: DualTranslatorScreen(controller: _controller),
     );
