@@ -79,7 +79,7 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      setupStatus = 'Installing exact Ollama gemma3:1b';
+      setupStatus = 'Installing Eb Translator';
       final artifact = await _installer.install(onProgress: (progress, detail) {
         setupStatus = detail;
         setupProgress = progress * 0.62;
@@ -87,23 +87,23 @@ class TranslatorController extends ChangeNotifier {
       });
       _artifact = artifact;
 
-      setupStatus = 'Downloading Supertonic 3';
+      setupStatus = 'Downloading Speech Synthesys';
       await _tts.prepare(onProgress: (done, total, file, fileProgress) {
         final aggregate = total == 0 ? 0.0 : (done + fileProgress) / total;
         setupProgress = 0.62 + aggregate.clamp(0, 1) * 0.32;
-        setupStatus = 'Supertonic 3: $file';
+        setupStatus = 'Speech Synthesys: $file';
         notifyListeners();
       });
 
-      setupStatus = 'Downloading offline speech recognition';
+      setupStatus = 'Downloading Speech Recognition';
       await _stt.prepare(onProgress: (progress) {
         setupProgress = 0.94 + progress.clamp(0, 1) * 0.06;
-        setupStatus = 'Offline speech recognition';
+        setupStatus = 'Speech Recognition';
         notifyListeners();
       });
 
       // Do not initialize any native engine here. The setup phase is strictly
-      // download-only to avoid loading STT + TTS + Gemma at the same time.
+      // download-only to avoid loading STT + TTS + Eb Translator at the same time.
       ready = true;
       setupProgress = 1;
       setupStatus = 'Offline models ready';
@@ -118,7 +118,7 @@ class TranslatorController extends ChangeNotifier {
   Future<ModelArtifact> _requireArtifact() async {
     final cached = _artifact ?? await _installer.cachedArtifact();
     if (cached == null) {
-      throw StateError('Gemma model is not installed.');
+      throw StateError('Eb Translator model is not installed.');
     }
     _artifact = cached;
     return cached;
@@ -169,13 +169,14 @@ class TranslatorController extends ChangeNotifier {
         await stopListening(submitTranscript: false);
       }
 
-      // Memory-safe mode: release Gemma/TTS before bringing up Sherpa ASR.
+      // Memory-safe mode: release Eb Translator/Speech Synthesys before
+      // bringing up Speech Recognition.
       await _translator.dispose();
       await _tts.releaseRuntime();
 
       liveTranscript = '';
       listeningSide = side;
-      setupStatus = 'Loading speech recognizer…';
+      setupStatus = 'Loading Speech Recognition…';
       notifyListeners();
 
       await _stt.startListening((text) {
@@ -206,7 +207,7 @@ class TranslatorController extends ChangeNotifier {
     final text = liveTranscript.trim();
     liveTranscript = '';
 
-    // Fully release ASR before loading Gemma for translation.
+    // Fully release Speech Recognition before loading Eb Translator.
     await _stt.releaseRuntime();
     setupStatus = 'Offline models ready';
     notifyListeners();
@@ -239,12 +240,12 @@ class TranslatorController extends ChangeNotifier {
       textA = '';
     }
 
-    setupStatus = 'Loading Gemma 3…';
+    setupStatus = 'Loading Eb Translator…';
     notifyListeners();
 
     var answer = '';
     try {
-      // Ensure only Gemma is resident while translating.
+      // Ensure only Eb Translator is resident while translating.
       await _stt.releaseRuntime();
       await _tts.releaseRuntime();
       final artifact = await _requireArtifact();
@@ -288,11 +289,11 @@ class TranslatorController extends ChangeNotifier {
       notifyListeners();
 
       if (autoSpeak && answer.isNotEmpty) {
-        setupStatus = 'Preparing speech…';
+        setupStatus = 'Preparing Speech Synthesys…';
         notifyListeners();
 
-        // Free Gemma before initializing Supertonic. This costs a reload on the
-        // next turn but keeps peak RAM much lower on mobile devices.
+        // Free Eb Translator before initializing Speech Synthesys. This costs a
+        // reload on the next turn but keeps peak RAM much lower on mobile.
         await _translator.dispose();
         await _tts.speak(answer, language: target.ttsCode);
       }
