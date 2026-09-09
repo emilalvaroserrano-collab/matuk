@@ -1,22 +1,24 @@
 class ModelConstants {
   ModelConstants._();
 
-  static const ollamaModel = 'gemma3';
-  static const ollamaTag = '1b';
-  static const manifestUri =
-      'https://registry.ollama.ai/v2/library/gemma3/manifests/1b';
-  static const blobBaseUri =
-      'https://registry.ollama.ai/v2/library/gemma3/blobs';
-  static const modelMediaType = 'application/vnd.ollama.image.model';
-  static const modelDigestPrefix = '7cd4618c1faf';
+  // User-facing alias: Eb Translator.
+  // Source model: HuggingFaceTB/SmolLM2-360M-Instruct.
+  // llama.cpp consumes Hugging Face's official GGUF conversion of the same model.
+  static const modelRepository =
+      'HuggingFaceTB/SmolLM2-360M-Instruct-GGUF';
+  static const modelFile = 'smollm2-360m-instruct-q8_0.gguf';
+  static const modelUri =
+      'https://huggingface.co/HuggingFaceTB/SmolLM2-360M-Instruct-GGUF/resolve/main/smollm2-360m-instruct-q8_0.gguf?download=true';
+  static const modelSha256 =
+      '48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201';
 
-  static const stopSequence = '<end_of_turn>';
-  static const temperature = 1.0;
-  static const topK = 64;
-  static const topP = 0.95;
+  static const stopSequence = '<|im_end|>';
+  static const temperature = 0.2;
+  static const topK = 40;
+  static const topP = 0.9;
 
-  // Translation turns are short, so a 2K context materially lowers mobile KV
-  // cache RAM without changing the exact Ollama gemma3:1b model weights.
+  // Translation turns are short. Keeping a 2K context lowers mobile KV-cache
+  // RAM while remaining well inside SmolLM2's supported context window.
   static const contextSize = 2048;
   static const maxOutputTokens = 384;
 }
