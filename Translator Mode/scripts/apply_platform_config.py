@@ -77,6 +77,148 @@ else:
 proguard = root / 'android/app/proguard-rules.pro'
 proguard.write_text('''-keepclasseswithmembernames class * { native <methods>; }\n''')
 
+# Speech Synthesys generates PCM in Flutter. Android plays that PCM directly
+# through AudioTrack rather than writing a WAV and asking MediaPlayer to set a
+# file source. This avoids MEDIA_ERROR_SYSTEM / Failed to set source failures.
+main_activity = (
+    root
+    / 'android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt'
+)
+main_activity.parent.mkdir(parents=True, exist_ok=True)
+main_activity.write_text(r'''package ai.eburon.matuk_translator_mode
+
+import android.media.AudioAttributes
+import android.media.AudioFormat
+import android.media.AudioTrack
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.MethodChannel
+import java.util.concurrent.Executors
+
+class MainActivity : FlutterActivity() {
+    private val audioExecutor = Executors.newSingleThreadExecutor()
+
+    @Volatile
+    private var currentTrack: AudioTrack? = null
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+        MethodChannel(
+            flutterEngine.dartExecutor.binaryMessenger,
+            "ai.eburon.dual_translate/audio_output",
+        ).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "playPcm16" -> {
+                    val sampleRate = call.argument<Int>("sampleRate")
+                    val pcm = call.argument<ByteArray>("pcm")
+                    if (sampleRate == null || sampleRate <= 0 || pcm == null || pcm.isEmpty()) {
+                        result.error("AUDIO_BAD_INPUT", "Invalid PCM audio payload", null)
+                        return@setMethodCallHandler
+                    }
+                    audioExecutor.execute {
+                        try {
+                            playPcm16Blocking(pcm, sampleRate)
+                            runOnUiThread { result.success(null) }
+                        } catch (t: Throwable) {
+                            runOnUiThread {
+                                result.error(
+                                    "AUDIO_TRACK_ERROR",
+                                    t.message ?: t.javaClass.simpleName,
+                                    null,
+                                )
+                            }
+                        }
+                    }
+                }
+                "stopPcm" -> {
+                    stopCurrentTrack()
+                    result.success(null)
+                }
+                else -> result.notImplemented()
+            }
+        }
+    }
+
+    private fun playPcm16Blocking(pcm: ByteArray, sampleRate: Int) {
+        stopCurrentTrack()
+
+        val minBuffer = AudioTrack.getMinBufferSize(
+            sampleRate,
+            AudioFormat.CHANNEL_OUT_MONO,
+            AudioFormat.ENCODING_PCM_16BIT,
+        )
+        if (minBuffer <= 0) {
+            throw IllegalStateException("Unsupported Speech Synthesys sample rate: $sampleRate")
+        }
+
+        val track = AudioTrack.Builder()
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                    .build(),
+            )
+            .setAudioFormat(
+                AudioFormat.Builder()
+                    .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                    .setSampleRate(sampleRate)
+                    .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                    .build(),
+            )
+            .setBufferSizeInBytes(maxOf(minBuffer, 8192))
+            .setTransferMode(AudioTrack.MODE_STREAM)
+            .build()
+
+        if (track.state != AudioTrack.STATE_INITIALIZED) {
+            track.release()
+            throw IllegalStateException("Android AudioTrack failed to initialize")
+        }
+
+        currentTrack = track
+        try {
+            track.play()
+            var offset = 0
+            while (offset < pcm.size && currentTrack === track) {
+                val written = track.write(
+                    pcm,
+                    offset,
+                    pcm.size - offset,
+                    AudioTrack.WRITE_BLOCKING,
+                )
+                if (written < 0) {
+                    throw IllegalStateException("Android AudioTrack write failed: $written")
+                }
+                if (written == 0) {
+                    Thread.yield()
+                } else {
+                    offset += written
+                }
+            }
+        } finally {
+            if (currentTrack === track) currentTrack = null
+            try { track.stop() } catch (_: Throwable) {}
+            try { track.flush() } catch (_: Throwable) {}
+            try { track.release() } catch (_: Throwable) {}
+        }
+    }
+
+    private fun stopCurrentTrack() {
+        val track = currentTrack ?: return
+        currentTrack = null
+        try { track.pause() } catch (_: Throwable) {}
+        try { track.flush() } catch (_: Throwable) {}
+        try { track.stop() } catch (_: Throwable) {}
+        try { track.release() } catch (_: Throwable) {}
+    }
+
+    override fun onDestroy() {
+        stopCurrentTrack()
+        audioExecutor.shutdownNow()
+        super.onDestroy()
+    }
+}
+''')
+
 ios_root = root / 'ios'
 if ios_root.exists():
     plist = ios_root / 'Runner/Info.plist'
