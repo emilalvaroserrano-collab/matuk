@@ -34,7 +34,7 @@ class OfflineSttService {
     }
 
     await for (final progress in _models.downloadCatalogModel(_speechModel)) {
-      onProgress(progress.fraction.clamp(0.0, 1.0));
+      onProgress((progress.fraction ?? 0.0).clamp(0.0, 1.0));
     }
 
     cached = await _verifiedModelOrNull();
@@ -62,8 +62,6 @@ class OfflineSttService {
         ),
       );
     } catch (_) {
-      // Reliability fallback for Android devices whose GPU backend is not
-      // supported by whisper.cpp. CPU inference remains fully local.
       _engine = await WhisperEngine.load(
         model.path,
         config: const WhisperConfig(
@@ -112,10 +110,7 @@ class OfflineSttService {
         _lastText = text;
         _onText?.call(text);
       },
-      onError: (Object error, StackTrace stackTrace) {
-        // The controller receives native failures through stop()/startup;
-        // keep the stream listener from turning them into an uncaught error.
-      },
+      onError: (Object error, StackTrace stackTrace) {},
     );
   }
 
@@ -160,7 +155,6 @@ class OfflineSttService {
     try {
       return await _models.findCatalogModel(_speechModel);
     } on FormatException {
-      // A partial/corrupt cached file must not be treated as installed.
       await _models.delete(_speechModel.fileName);
       return null;
     }
