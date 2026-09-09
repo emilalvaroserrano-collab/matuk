@@ -1,7 +1,9 @@
 import 'dart:async';
+import 'dart:collection';
 
 import 'package:flutter/foundation.dart';
 
+import '../core/sentence_endpoint_detector.dart';
 import '../models/model_artifact.dart';
 import '../models/translation_language.dart';
 import '../models/translation_turn.dart';
@@ -56,6 +58,11 @@ class TranslatorController extends ChangeNotifier {
   String textB = '';
   String? error;
 
+  bool _voiceSessionActive = false;
+  TranslationSide? _sessionSide;
+  bool _processingSentenceQueue = false;
+  final Queue<_QueuedSentence> _sentenceQueue = Queue<_QueuedSentence>();
+
   final List<TranslationTurn> _history = [];
   List<TranslationTurn> get history => List.unmodifiable(_history);
 
@@ -73,6 +80,7 @@ class TranslatorController extends ChangeNotifier {
       speechSynthesysStatus == 'Ready';
 
   bool get busy => preparing || generating || listeningSide != null;
+  bool get voiceSessionActive => _voiceSessionActive;
 
   TranslationSide? get lastOutputSide {
     if (_history.isEmpty) return null;
@@ -123,7 +131,7 @@ class TranslatorController extends ChangeNotifier {
       speechSynthesysProgress = ttsReady ? 1 : 0;
       speechSynthesysStatus = ttsReady ? 'Ready' : 'Not installed';
       speechRecognitionProgress = sttReady ? 1 : 0;
-      speechRecognitionStatus = sttReady ? 'Ready' : 'Unavailable';
+      speechRecognitionStatus = sttReady ? 'Ready' : 'Not installed';
       error = null;
       _syncReadyState();
       notifyListeners();
@@ -197,8 +205,10 @@ class TranslatorController extends ChangeNotifier {
     installingSpeechRecognition = true;
     ready = false;
     error = null;
-    speechRecognitionStatus = 'Checking device';
-    setupStatus = 'Checking Android on-device Speech Recognition';
+    speechRecognitionStatus = speechRecognitionProgress >= 0.999
+        ? 'Verifying'
+        : 'Downloading';
+    setupStatus = 'Installing Speech Recognition · Whisper Base';
     notifyListeners();
 
     try {
@@ -209,19 +219,19 @@ class TranslatorController extends ChangeNotifier {
 
       await _stt.prepare(onProgress: (progress) {
         speechRecognitionProgress = progress.clamp(0.0, 1.0);
-        speechRecognitionStatus =
-            speechRecognitionProgress >= 0.999 ? 'Ready' : 'Checking device';
-        setupStatus = 'Android on-device Speech Recognition';
+        speechRecognitionStatus = speechRecognitionProgress >= 0.999
+            ? 'Verifying'
+            : 'Downloading';
+        setupStatus = 'Speech Recognition · Whisper Base multilingual';
         _recalculateSetupProgress();
         notifyListeners();
       });
       speechRecognitionProgress = 1;
       speechRecognitionStatus = 'Ready';
     } catch (e) {
-      error = 'Speech Recognition unavailable: $e';
-      speechRecognitionProgress = 0;
-      speechRecognitionStatus = 'Unavailable';
-      setupStatus = 'Enable Android offline Speech Recognition on this device';
+      error = 'Speech Recognition installation failed: $e';
+      speechRecognitionStatus = 'Error';
+      setupStatus = 'Speech Recognition interrupted — retry this model only';
     } finally {
       installingSpeechRecognition = false;
       _syncReadyState();
@@ -317,41 +327,25 @@ class TranslatorController extends ChangeNotifier {
   }
 
   Future<void> toggleListening(TranslationSide side) async {
-    if (!ready || generating || preparing) return;
+    if (!ready || preparing) return;
     error = null;
 
+    if (_voiceSessionActive || listeningSide != null) {
+      _voiceSessionActive = false;
+      _sessionSide = null;
+      _sentenceQueue.clear();
+      await stopListening(submitTranscript: true);
+      return;
+    }
+    if (generating) return;
+
+    _voiceSessionActive = true;
+    _sessionSide = side;
     try {
-      if (listeningSide == side) {
-        await stopListening(submitTranscript: true);
-        return;
-      }
-      if (listeningSide != null) {
-        await stopListening(submitTranscript: false);
-      }
-
-      await _translator.dispose();
-      await _tts.releaseRuntime();
-
-      liveTranscript = '';
-      listeningSide = side;
-      setupStatus = 'Loading Speech Recognition…';
-      notifyListeners();
-
-      final sourceLanguage =
-          side == TranslationSide.a ? languageA : languageB;
-      _stt.setLanguageTag(sourceLanguage.sttCode);
-      await _stt.startListening((text) {
-        liveTranscript = text.trim();
-        if (side == TranslationSide.a) {
-          textA = liveTranscript;
-        } else {
-          textB = liveTranscript;
-        }
-        notifyListeners();
-      });
-      setupStatus = 'Listening';
-      notifyListeners();
+      await _startListening(side);
     } catch (e) {
+      _voiceSessionActive = false;
+      _sessionSide = null;
       listeningSide = null;
       error = e.toString();
       setupStatus = 'Offline models ready';
@@ -359,13 +353,110 @@ class TranslatorController extends ChangeNotifier {
     }
   }
 
+  Future<void> _startListening(TranslationSide side) async {
+    if (!_voiceSessionActive || generating || preparing) return;
+
+    await _translator.dispose();
+    await _tts.releaseRuntime();
+
+    liveTranscript = '';
+    listeningSide = side;
+    setupStatus = 'Loading Speech Recognition…';
+    notifyListeners();
+
+    final sourceLanguage = side == TranslationSide.a ? languageA : languageB;
+    _stt.setLanguageTag(sourceLanguage.sttCode);
+    await _stt.startListening(
+      (text) {
+        liveTranscript = text.trim();
+        if (side == TranslationSide.a) {
+          textA = liveTranscript;
+        } else {
+          textB = liveTranscript;
+        }
+        notifyListeners();
+      },
+      onSentence: (utterance) {
+        _enqueueSentenceUtterance(side, utterance);
+      },
+    );
+    setupStatus = 'Listening · sentence streaming';
+    notifyListeners();
+  }
+
+  void _enqueueSentenceUtterance(TranslationSide side, String utterance) {
+    if (!_voiceSessionActive || listeningSide != side) return;
+    final sentences = SentenceEndpointDetector.splitForShipping(utterance);
+    for (final sentence in sentences) {
+      final value = sentence.trim();
+      if (value.isNotEmpty) {
+        _sentenceQueue.add(_QueuedSentence(side, value));
+      }
+    }
+    if (_sentenceQueue.isNotEmpty) {
+      unawaited(_processSentenceQueue());
+    }
+  }
+
+  Future<void> _processSentenceQueue() async {
+    if (_processingSentenceQueue) return;
+    _processingSentenceQueue = true;
+
+    try {
+      if (listeningSide != null) {
+        await _stt.stopListening();
+        listeningSide = null;
+        liveTranscript = '';
+        await _stt.releaseRuntime();
+        setupStatus = 'Sentence finalized';
+        notifyListeners();
+      }
+
+      while (_sentenceQueue.isNotEmpty && _voiceSessionActive) {
+        final item = _sentenceQueue.removeFirst();
+        await translate(item.side, item.text);
+      }
+    } catch (e) {
+      error = e.toString();
+      setupStatus = 'Offline models ready';
+      notifyListeners();
+    } finally {
+      _processingSentenceQueue = false;
+    }
+
+    if (_voiceSessionActive &&
+        _sessionSide != null &&
+        _sentenceQueue.isEmpty &&
+        !generating &&
+        ready) {
+      try {
+        await Future<void>.delayed(const Duration(milliseconds: 180));
+        await _startListening(_sessionSide!);
+      } catch (e) {
+        _voiceSessionActive = false;
+        _sessionSide = null;
+        listeningSide = null;
+        error = e.toString();
+        setupStatus = 'Offline models ready';
+        notifyListeners();
+      }
+    }
+  }
+
   Future<void> stopListening({bool submitTranscript = false}) async {
     final side = listeningSide;
     if (side == null) return;
 
-    await _stt.stopListening();
+    final beforeStop = liveTranscript.trim();
+    try {
+      await _stt.stopListening();
+    } catch (e) {
+      error = e.toString();
+    }
+
     listeningSide = null;
-    final text = liveTranscript.trim();
+    final afterStop = liveTranscript.trim();
+    final text = afterStop.isNotEmpty ? afterStop : beforeStop;
     liveTranscript = '';
 
     await _stt.releaseRuntime();
@@ -373,7 +464,10 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
 
     if (submitTranscript && text.isNotEmpty) {
-      await translate(side, text);
+      final sentences = SentenceEndpointDetector.splitForShipping(text);
+      for (final sentence in sentences) {
+        await translate(side, sentence);
+      }
     }
   }
 
@@ -387,10 +481,8 @@ class TranslatorController extends ChangeNotifier {
     error = null;
     generating = true;
 
-    final source =
-        sourceSide == TranslationSide.a ? languageA : languageB;
-    final target =
-        sourceSide == TranslationSide.a ? languageB : languageA;
+    final source = sourceSide == TranslationSide.a ? languageA : languageB;
+    final target = sourceSide == TranslationSide.a ? languageB : languageA;
 
     if (sourceSide == TranslationSide.a) {
       textA = text;
@@ -489,6 +581,9 @@ class TranslatorController extends ChangeNotifier {
   }
 
   Future<void> stopGeneration() async {
+    _voiceSessionActive = false;
+    _sessionSide = null;
+    _sentenceQueue.clear();
     await _translator.stop();
     await _translator.dispose();
     generating = false;
@@ -503,6 +598,9 @@ class TranslatorController extends ChangeNotifier {
 
   void clearConversation() {
     if (listeningSide != null || generating) return;
+    _voiceSessionActive = false;
+    _sessionSide = null;
+    _sentenceQueue.clear();
     textA = '';
     textB = '';
     liveTranscript = '';
@@ -513,10 +611,19 @@ class TranslatorController extends ChangeNotifier {
 
   @override
   void dispose() {
+    _voiceSessionActive = false;
+    _sentenceQueue.clear();
     unawaited(_translator.dispose());
     unawaited(_stt.dispose());
     _tts.dispose();
     _installer.dispose();
     super.dispose();
   }
+}
+
+class _QueuedSentence {
+  const _QueuedSentence(this.side, this.text);
+
+  final TranslationSide side;
+  final String text;
 }
