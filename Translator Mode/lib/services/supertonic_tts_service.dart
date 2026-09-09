@@ -39,8 +39,8 @@ class SupertonicTtsService {
     return true;
   }
 
-  /// First-run setup is download-only. Native TTS initialization is deferred
-  /// until audio is actually requested, avoiding a large setup memory spike.
+  /// First-run setup is download-only. Native Speech Synthesys initialization
+  /// is deferred until audio is actually requested.
   Future<void> prepare({
     required void Function(int done, int total, String file, double progress)
         onProgress,
@@ -83,7 +83,7 @@ class SupertonicTtsService {
     final response = await _client.send(request);
     if (response.statusCode != HttpStatus.ok) {
       throw HttpException(
-        'Supertonic model download failed for $name: HTTP ${response.statusCode}',
+        'Speech Synthesys model download failed for $name: HTTP ${response.statusCode}',
       );
     }
 
@@ -101,7 +101,7 @@ class SupertonicTtsService {
       await sink.flush();
       await sink.close();
       if (await part.length() == 0) {
-        throw StateError('Downloaded Supertonic model file is empty: $name');
+        throw StateError('Downloaded Speech Synthesys model file is empty: $name');
       }
       await part.rename(target.path);
     } catch (_) {
@@ -114,7 +114,7 @@ class SupertonicTtsService {
   Future<void> initialize() async {
     if (_initialized) return;
     if (!await modelsReady()) {
-      throw StateError('Supertonic 3 model files are not ready.');
+      throw StateError('Speech Synthesys model files are not ready.');
     }
 
     await sherpa_onnx.initBindingsAsync();
@@ -163,19 +163,19 @@ class SupertonicTtsService {
     );
 
     final temp = await getTemporaryDirectory();
-    final wav = File('${temp.path}/matuk_supertonic.wav');
+    final wav = File('${temp.path}/matuk_speech_synthesys.wav');
     final ok = sherpa_onnx.writeWave(
       filename: wav.path,
       samples: audio.samples,
       sampleRate: audio.sampleRate,
     );
-    if (!ok) throw StateError('Failed to write Supertonic audio.');
+    if (!ok) throw StateError('Failed to write Speech Synthesys audio.');
     await _player.play(DeviceFileSource(wav.path));
   }
 
   Future<void> stop() => _player.stop();
 
-  /// Frees the native TTS model while retaining downloaded model files.
+  /// Frees the native Speech Synthesys model while retaining downloaded files.
   Future<void> releaseRuntime() async {
     await _player.stop();
     _tts?.free();
