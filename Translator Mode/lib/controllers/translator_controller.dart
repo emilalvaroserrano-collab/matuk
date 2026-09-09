@@ -104,7 +104,7 @@ class TranslatorController extends ChangeNotifier {
       if (speechSynthesysStatus != 'Ready') missing.add('Speech Synthesys');
       setupStatus = missing.isEmpty
           ? 'Checking local models…'
-          : 'Install separately: ${missing.join(', ')}';
+          : 'Required: ${missing.join(', ')}';
     }
   }
 
@@ -123,7 +123,7 @@ class TranslatorController extends ChangeNotifier {
       speechSynthesysProgress = ttsReady ? 1 : 0;
       speechSynthesysStatus = ttsReady ? 'Ready' : 'Not installed';
       speechRecognitionProgress = sttReady ? 1 : 0;
-      speechRecognitionStatus = sttReady ? 'Ready' : 'Not installed';
+      speechRecognitionStatus = sttReady ? 'Ready' : 'Unavailable';
       error = null;
       _syncReadyState();
       notifyListeners();
@@ -197,10 +197,8 @@ class TranslatorController extends ChangeNotifier {
     installingSpeechRecognition = true;
     ready = false;
     error = null;
-    speechRecognitionStatus = speechRecognitionProgress >= 0.999
-        ? 'Verifying'
-        : 'Downloading';
-    setupStatus = 'Installing Speech Recognition only';
+    speechRecognitionStatus = 'Checking device';
+    setupStatus = 'Checking Android on-device Speech Recognition';
     notifyListeners();
 
     try {
@@ -211,19 +209,19 @@ class TranslatorController extends ChangeNotifier {
 
       await _stt.prepare(onProgress: (progress) {
         speechRecognitionProgress = progress.clamp(0.0, 1.0);
-        speechRecognitionStatus = speechRecognitionProgress >= 0.999
-            ? 'Verifying'
-            : 'Downloading';
-        setupStatus = 'Speech Recognition';
+        speechRecognitionStatus =
+            speechRecognitionProgress >= 0.999 ? 'Ready' : 'Checking device';
+        setupStatus = 'Android on-device Speech Recognition';
         _recalculateSetupProgress();
         notifyListeners();
       });
       speechRecognitionProgress = 1;
       speechRecognitionStatus = 'Ready';
     } catch (e) {
-      error = 'Speech Recognition installation failed: $e';
-      speechRecognitionStatus = 'Error';
-      setupStatus = 'Speech Recognition interrupted — retry this model only';
+      error = 'Speech Recognition unavailable: $e';
+      speechRecognitionProgress = 0;
+      speechRecognitionStatus = 'Unavailable';
+      setupStatus = 'Enable Android offline Speech Recognition on this device';
     } finally {
       installingSpeechRecognition = false;
       _syncReadyState();
@@ -339,6 +337,9 @@ class TranslatorController extends ChangeNotifier {
       setupStatus = 'Loading Speech Recognition…';
       notifyListeners();
 
+      final sourceLanguage =
+          side == TranslationSide.a ? languageA : languageB;
+      _stt.setLanguageTag(sourceLanguage.sttCode);
       await _stt.startListening((text) {
         liveTranscript = text.trim();
         if (side == TranslationSide.a) {
