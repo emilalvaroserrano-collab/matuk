@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:audioplayers/audioplayers.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:sherpa_onnx/sherpa_onnx.dart' as sherpa_onnx;
@@ -20,6 +23,12 @@ class SupertonicTtsService {
     'voice.bin',
   ];
 
+  static const MethodChannel _androidAudio = MethodChannel(
+    'ai.eburon.dual_translate/audio_output',
+  );
+
+  // Kept only as a non-Android fallback. Android uses AudioTrack directly so
+  // generated Supertonic PCM never passes through MediaPlayer/setSource.
   final AudioPlayer _player = AudioPlayer();
   final http.Client _client = http.Client();
   sherpa_onnx.OfflineTts? _tts;
@@ -149,7 +158,7 @@ class SupertonicTtsService {
     if (cleaned.isEmpty) return;
     if (!_initialized) await initialize();
 
-    await _player.stop();
+    await stop();
     final audio = _tts!.generateWithConfig(
       text: cleaned,
       config: sherpa_onnx.OfflineTtsGenerationConfig(
@@ -162,6 +171,25 @@ class SupertonicTtsService {
       ),
     );
 
+    if (audio.samples.isEmpty || audio.sampleRate <= 0) {
+      throw StateError('Speech Synthesys produced invalid audio.');
+    }
+
+    if (Platform.isAndroid) {
+      final pcm16 = _encodePcm16(audio.samples);
+      try {
+        await _androidAudio.invokeMethod<void>('playPcm16', <String, Object>{
+          'sampleRate': audio.sampleRate,
+          'pcm': pcm16,
+        });
+      } on PlatformException catch (e) {
+        throw StateError(
+          'Speech Synthesys Android audio output failed: ${e.message ?? e.code}',
+        );
+      }
+      return;
+    }
+
     final temp = await getTemporaryDirectory();
     final wav = File('${temp.path}/matuk_speech_synthesys.wav');
     final ok = sherpa_onnx.writeWave(
@@ -173,17 +201,40 @@ class SupertonicTtsService {
     await _player.play(DeviceFileSource(wav.path));
   }
 
-  Future<void> stop() => _player.stop();
+  Uint8List _encodePcm16(List<double> samples) {
+    final bytes = Uint8List(samples.length * 2);
+    final data = ByteData.sublistView(bytes);
+    for (var i = 0; i < samples.length; i++) {
+      final normalized = samples[i].clamp(-1.0, 1.0).toDouble();
+      final value = (normalized * 32767.0).round().clamp(-32768, 32767);
+      data.setInt16(i * 2, value, Endian.little);
+    }
+    return bytes;
+  }
+
+  Future<void> stop() async {
+    if (Platform.isAndroid) {
+      try {
+        await _androidAudio.invokeMethod<void>('stopPcm');
+      } on PlatformException {
+        // Playback may already have completed or the channel may be tearing down.
+      }
+    }
+    await _player.stop();
+  }
 
   /// Frees the native Speech Synthesys model while retaining downloaded files.
   Future<void> releaseRuntime() async {
-    await _player.stop();
+    await stop();
     _tts?.free();
     _tts = null;
     _initialized = false;
   }
 
   void dispose() {
+    if (Platform.isAndroid) {
+      unawaited(_androidAudio.invokeMethod<void>('stopPcm'));
+    }
     _tts?.free();
     _tts = null;
     _initialized = false;
