@@ -33,10 +33,18 @@ manifest.write_text(text)
 
 ndk_version = '28.2.13676358'
 
+# lib_llama_cpp_android 0.7.3 requires Android API 28. Do not override the
+# library manifest with a lower value because that can produce runtime crashes.
+min_sdk = 28
+
 kts = root / 'android/app/build.gradle.kts'
 if kts.exists():
     text = kts.read_text()
-    text = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 26', text)
+    text = re.sub(
+        r'minSdk\s*=\s*(?:flutter\.minSdkVersion|\d+)',
+        f'minSdk = {min_sdk}',
+        text,
+    )
     if 'ndkVersion' in text:
         text = re.sub(
             r'ndkVersion\s*=\s*(?:flutter\.ndkVersion|"[^"]+")',
@@ -54,8 +62,8 @@ else:
     if gradle.exists():
         text = gradle.read_text()
         text = re.sub(
-            r'minSdkVersion\s+flutter\.minSdkVersion',
-            'minSdkVersion 26',
+            r'minSdkVersion\s+(?:flutter\.minSdkVersion|\d+)',
+            f'minSdkVersion {min_sdk}',
             text,
         )
         if 'ndkVersion' in text:
