@@ -11,7 +11,12 @@ class TranslationLanguage {
 }
 
 const translationLanguages = <TranslationLanguage>[
-  TranslationLanguage(code: 'en', displayName: 'English', ttsCode: 'en'),
+  TranslationLanguage(code: 'en', displayName: 'English (US)', ttsCode: 'en'),
+  TranslationLanguage(
+    code: 'tl',
+    displayName: 'Tagalog (Filipino)',
+    ttsCode: 'tl',
+  ),
   TranslationLanguage(
     code: 'nl-BE',
     displayName: 'Dutch (Flemish)',
