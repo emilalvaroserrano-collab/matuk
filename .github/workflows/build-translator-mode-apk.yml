@@ -45,41 +45,47 @@ jobs:
         working-directory: Translator Mode
         run: flutter build apk --release
 
-      - name: Verify APK
+      - name: Verify APK native runtime
         working-directory: Translator Mode
         run: |
-          test -f build/app/outputs/flutter-apk/app-release.apk
-          ls -lh build/app/outputs/flutter-apk/app-release.apk
-          sha256sum build/app/outputs/flutter-apk/app-release.apk
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          test -f "$APK"
+          ls -lh "$APK"
+          sha256sum "$APK"
+          unzip -l "$APK" | grep 'lib/arm64-v8a/libonnxruntime.so'
+          if unzip -l "$APK" | grep -q 'lib/arm64-v8a/libonnxruntime4j_jni.so'; then
+            echo 'ERROR: incompatible ONNX Runtime Java JNI bridge is still packaged'
+            exit 1
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: matuk-translator-mode-apk
+          name: matuk-translator-mode-v0.1.1-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" matuk-translator-mode-v0.1.0.apk
-          sha256sum matuk-translator-mode-v0.1.0.apk > matuk-translator-mode-v0.1.0.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" matuk-translator-mode-v0.1.1.apk
+          sha256sum matuk-translator-mode-v0.1.1.apk > matuk-translator-mode-v0.1.1.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.1.0"
+          TAG="translator-mode-v0.1.1"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" \
-              matuk-translator-mode-v0.1.0.apk \
-              matuk-translator-mode-v0.1.0.apk.sha256 \
+              matuk-translator-mode-v0.1.1.apk \
+              matuk-translator-mode-v0.1.1.apk.sha256 \
               --clobber
           else
             gh release create "$TAG" \
-              matuk-translator-mode-v0.1.0.apk \
-              matuk-translator-mode-v0.1.0.apk.sha256 \
+              matuk-translator-mode-v0.1.1.apk \
+              matuk-translator-mode-v0.1.1.apk.sha256 \
               --target "$GITHUB_SHA" \
-              --title "Translator Mode v0.1.0" \
-              --notes "First Android release of Matuk Translator Mode. Local-first dual translator using Gemma 3 1B, offline Sherpa STT, and Supertonic 3 TTS. Models are prepared on first run."
+              --title "Translator Mode v0.1.1" \
+              --notes "Startup-crash fix. Supertonic 3 now runs through the same Sherpa-ONNX runtime used by STT, removing the incompatible duplicate ONNX Runtime JNI bridge. Also defers native runtime checks until first-run model setup."
           fi
