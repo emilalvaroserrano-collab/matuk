@@ -33,13 +33,13 @@ class OfflineSttService {
   }
 
   /// Android Speech Recognition is provided by the device itself.
-  /// No separate STT model is downloaded by Dual Translate.
+  /// No separate STT model is bundled or downloaded by Dual Translate.
   Future<void> prepare({required void Function(double progress) onProgress}) async {
     onProgress(0.2);
     if (!await modelsReady()) {
       throw StateError(
         'Android on-device Speech Recognition is unavailable on this device. '
-        'Install or enable the device offline speech recognition service/language pack.',
+        'Install or enable the device offline speech recognition service.',
       );
     }
     onProgress(1);
@@ -109,10 +109,31 @@ class OfflineSttService {
     );
 
     try {
-      await _methods.invokeMethod<void>('start', <String, Object>{
-        'languageTag': _languageTag,
-      });
+      final response = await _methods.invokeMapMethod<String, dynamic>(
+        'start',
+        <String, Object>{'languageTag': _languageTag},
+      );
+      final effectiveLanguage = response?['languageTag']?.toString();
+      if (effectiveLanguage != null && effectiveLanguage.isNotEmpty) {
+        _languageTag = effectiveLanguage;
+      }
       _listening = true;
+    } on PlatformException catch (e) {
+      await _subscription?.cancel();
+      _subscription = null;
+      _onText = null;
+      final message = e.message ?? e.code;
+      if (e.code == 'STT_LANGUAGE_DOWNLOAD_SCHEDULED') {
+        throw StateError(
+          '$message Retry the microphone after Android finishes installing the offline speech pack.',
+        );
+      }
+      if (e.code == 'STT_LANGUAGE_UNAVAILABLE') {
+        throw StateError(
+          '$message Connect the device temporarily so Android can install this offline language pack, then retry.',
+        );
+      }
+      rethrow;
     } catch (_) {
       await _subscription?.cancel();
       _subscription = null;
