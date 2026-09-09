@@ -75,7 +75,9 @@ class OfflineSttService {
   }
 
   Future<void> _ensureEngineLoaded() async {
-    if (_engine != null) return;
+    if (_engine != null) {
+      return;
+    }
     final modelFile = await _verifiedModel();
     if (modelFile == null) {
       throw StateError('Speech Recognition model is not installed.');
@@ -146,8 +148,12 @@ class OfflineSttService {
       _onText?.call(display);
     }
 
-    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) return;
-    if (!SentenceEndpointDetector.isSubstantial(display)) return;
+    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) {
+      return;
+    }
+    if (!SentenceEndpointDetector.isSubstantial(display)) {
+      return;
+    }
 
     if (display != _latestText) {
       _latestText = display;
@@ -166,9 +172,13 @@ class OfflineSttService {
   }
 
   void _emitLatestSentence() {
-    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) return;
+    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) {
+      return;
+    }
     final sentence = _latestText.trim();
-    if (!SentenceEndpointDetector.isSubstantial(sentence)) return;
+    if (!SentenceEndpointDetector.isSubstantial(sentence)) {
+      return;
+    }
     _sentenceEmitted = true;
     _sentenceTimer?.cancel();
     scheduleMicrotask(() => _onSentence?.call(sentence));
@@ -178,7 +188,9 @@ class OfflineSttService {
     await _stopStream(suppressSentenceCallbacks: true);
     final failure = _lastError;
     _lastError = null;
-    if (failure != null) throw StateError(failure);
+    if (failure != null) {
+      throw StateError(failure);
+    }
   }
 
   Future<void> _stopStream({required bool suppressSentenceCallbacks}) async {
@@ -226,14 +238,30 @@ class OfflineSttService {
 
   String _whisperLanguageCode(String languageTag) {
     final normalized = languageTag.trim().toLowerCase();
-    if (normalized.startsWith('fil') || normalized.startsWith('tl')) return 'tl';
-    if (normalized.startsWith('nl')) return 'nl';
-    if (normalized.startsWith('en')) return 'en';
-    if (normalized.startsWith('fr')) return 'fr';
-    if (normalized.startsWith('de')) return 'de';
-    if (normalized.startsWith('es')) return 'es';
-    if (normalized.startsWith('it')) return 'it';
-    if (normalized.startsWith('pt')) return 'pt';
+    if (normalized.startsWith('fil') || normalized.startsWith('tl')) {
+      return 'tl';
+    }
+    if (normalized.startsWith('nl')) {
+      return 'nl';
+    }
+    if (normalized.startsWith('en')) {
+      return 'en';
+    }
+    if (normalized.startsWith('fr')) {
+      return 'fr';
+    }
+    if (normalized.startsWith('de')) {
+      return 'de';
+    }
+    if (normalized.startsWith('es')) {
+      return 'es';
+    }
+    if (normalized.startsWith('it')) {
+      return 'it';
+    }
+    if (normalized.startsWith('pt')) {
+      return 'pt';
+    }
     final language = normalized.split(RegExp('[-_]')).first;
     return language.isEmpty ? 'auto' : language;
   }
