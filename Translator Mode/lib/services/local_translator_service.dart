@@ -35,14 +35,17 @@ class LocalTranslatorService {
 
     if (Platform.isIOS) {
       final runtime = ios_llama.createLlamaRuntime();
-      final format = ios_llama.resolveChatFormat('gemma');
+      // Inference uses our exact raw SmolLM2 ChatML prompt below. The format
+      // value is required by ModelSpec metadata only.
+      final format = ios_llama.resolveChatFormat('chatml') ??
+          ios_llama.resolveChatFormat('gemma');
       if (format == null) {
-        throw StateError('llama_cpp_flutter has no Gemma chat format.');
+        throw StateError('llama_cpp_flutter has no compatible chat format.');
       }
 
       ios_llama.ModelSpec buildSpec(int gpuLayers) => ios_llama.ModelSpec(
-            id: 'ollama-gemma3-1b-translator',
-            displayName: 'Ollama Gemma 3 1B Q4_K_M Translator',
+            id: 'eb-translator-smollm2-360m',
+            displayName: 'Eb Translator',
             modelUrl: artifact.sourceUri,
             contextSize: ModelConstants.contextSize,
             gpuLayers: gpuLayers,
@@ -61,7 +64,7 @@ class LocalTranslatorService {
     }
 
     throw UnsupportedError(
-      'Local Gemma inference is configured for Android and iOS only.',
+      'Eb Translator local inference is configured for Android and iOS only.',
     );
   }
 
@@ -70,7 +73,7 @@ class LocalTranslatorService {
     required TranslationLanguage target,
     required String text,
   }) async* {
-    if (!_loaded) throw StateError('Gemma model is not loaded.');
+    if (!_loaded) throw StateError('Eb Translator is not loaded.');
     final prompt = _renderer.render(source: source, target: target, text: text);
 
     if (Platform.isAndroid) {
