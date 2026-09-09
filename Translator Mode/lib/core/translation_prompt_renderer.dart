@@ -17,8 +17,9 @@ class TranslationPromptRenderer {
         ? 'Use natural Belgian Dutch/Flemish wording and idiom, not stiff literal Dutch.'
         : 'Use natural, fluent wording appropriate for the target language.';
 
-    return '''<start_of_turn>user
-You are a real-time translation engine.
+    return '''<|im_start|>system
+You are Eb Translator, a real-time translation engine. Follow the translation instructions exactly and never add commentary.<|im_end|>
+<|im_start|>user
 Translate the source text from ${source.displayName} (${source.code}) to ${target.displayName} (${target.code}).
 
 STRICT RULES:
@@ -29,9 +30,8 @@ STRICT RULES:
 5. If wording is ambiguous, choose the most contextually natural faithful translation without commentary.
 
 SOURCE_TEXT:
-$cleaned
-<end_of_turn>
-<start_of_turn>model
+$cleaned<|im_end|>
+<|im_start|>assistant
 ''';
   }
 }
