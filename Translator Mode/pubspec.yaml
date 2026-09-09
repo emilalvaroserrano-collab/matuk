@@ -1,7 +1,7 @@
 name: matuk_translator_mode
 description: Standalone local dual translator using Eb Translator, Speech Recognition, and Speech Synthesys.
 publish_to: "none"
-version: 1.1.0+5
+version: 1.1.1+6
 
 environment:
   sdk: ">=3.10.1 <4.0.0"
