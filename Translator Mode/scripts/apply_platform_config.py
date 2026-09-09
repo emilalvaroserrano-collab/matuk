@@ -67,7 +67,7 @@ else:
         gradle.write_text(text)
 
 proguard = root / 'android/app/proguard-rules.pro'
-proguard.write_text('''-keep class com.write4me.llama_flutter_android.** { *; }\n-keep class kotlin.jvm.functions.Function1\n-keepclassmembers class * implements kotlin.jvm.functions.Function1 {\n    public java.lang.Object invoke(java.lang.Object);\n}\n-keepclasseswithmembernames class * { native <methods>; }\n''')
+proguard.write_text('''-keepclasseswithmembernames class * { native <methods>; }\n''')
 
 ios_root = root / 'ios'
 if ios_root.exists():
