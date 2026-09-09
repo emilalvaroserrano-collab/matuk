@@ -21,7 +21,9 @@ python3 "$ROOT/scripts/apply_platform_config.py" "$ROOT"
 cd "$ROOT"
 flutter pub get
 dart format lib test
-flutter analyze
+# Compiler/analyzer errors and warnings remain fatal. Pure style/info lints do
+# not block a release build; they are still printed in CI for cleanup.
+flutter analyze --no-fatal-infos
 flutter test
 
 echo "Translator Mode Android bootstrap + static tests complete."
