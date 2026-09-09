@@ -45,23 +45,30 @@ jobs:
           grep -q '48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201' "Translator Mode/lib/core/model_constants.dart"
           grep -q '<|im_start|>assistant' "Translator Mode/lib/core/translation_prompt_renderer.dart"
           grep -q "Dual Translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
+          grep -q 'flutter_langdetect: ^0.0.2' "Translator Mode/pubspec.yaml"
+          grep -q 'LocalLanguageRouter' "Translator Mode/lib/services/local_language_router.dart"
+          grep -q 'latest detected non-Staff' "Translator Mode/lib/services/local_language_router.dart"
+          grep -q 'autoDetectGuestLanguage = true' "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q 'toggleVoiceSession' "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q 'toggleMicMute' "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q 'automatic language routing' "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q 'lib_llama_cpp: ^0.7.3' "Translator Mode/pubspec.yaml"
-          ! grep -q 'llama_flutter_android' "Translator Mode/pubspec.yaml"
-          ! grep -q 'llama_cpp_flutter:' "Translator Mode/pubspec.yaml"
+          grep -q 'LlamaHttpServer.open' "Translator Mode/lib/services/local_translator_service.dart"
+          grep -q 'streamChatCompletion' "Translator Mode/lib/services/local_translator_service.dart"
           grep -q 'whisper_cpp_flutter_plus: ^0.4.1' "Translator Mode/pubspec.yaml"
           grep -q 'WhisperModelCatalog.base' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'downloadCatalogModel' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'transcribeMicrophone' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'WhisperStreamConfig' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'onSentence' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'SentenceEndpointDetector' "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q 'Listening · sentence streaming' "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q 'LibLlamaCpp' "Translator Mode/lib/services/local_translator_service.dart"
-          grep -q 'LlamaGenerateCommand' "Translator Mode/lib/services/local_translator_service.dart"
+          grep -q 'updateInterval: Duration(milliseconds: 500)' "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q "_languageTag = 'auto'" "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q 'pauseListening' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'playPcm16' "Translator Mode/lib/services/supertonic_tts_service.dart"
           grep -q 'audio_output' "Translator Mode/lib/services/supertonic_tts_service.dart"
           grep -q 'AudioTrack' "Translator Mode/scripts/apply_platform_config.py"
-          grep -q 'version: 1.1.8+13' "Translator Mode/pubspec.yaml"
+          grep -q 'version: 1.1.9+14' "Translator Mode/pubspec.yaml"
+          if grep -R -n -E '@google/genai|google_generative_ai|Gemini|gemini' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
+            echo 'ERROR: cloud Gemini dependency/reference found in Translator Mode runtime'
+            exit 1
+          fi
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -79,6 +86,7 @@ jobs:
           grep -q 'AudioTrack' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
           grep -q 'playPcm16' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
           grep -q 'ai.eburon.dual_translate/audio_output' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
+          grep -q 'minSdk = 28' android/app/build.gradle.kts
           if grep -q 'android.speech.RecognitionService' android/app/src/main/AndroidManifest.xml; then
             echo 'ERROR: Android SpeechRecognizer bridge/query is still present'
             exit 1
@@ -117,27 +125,27 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.8-apk
+          name: dual-translate-v0.2.9-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.8.apk
-          sha256sum dual-translate-v0.2.8.apk > dual-translate-v0.2.8.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.9.apk
+          sha256sum dual-translate-v0.2.9.apk > dual-translate-v0.2.9.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.8"
+          TAG="translator-mode-v0.2.9"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.8.apk \
-            dual-translate-v0.2.8.apk.sha256 \
+            dual-translate-v0.2.9.apk \
+            dual-translate-v0.2.9.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.8" \
-            --notes "Fixes Speech Synthesys Android MEDIA_ERROR_SYSTEM / Failed to set source. Supertonic audio is no longer written to a temporary WAV and opened through Android MediaPlayer. On Android, generated samples are converted to PCM16 and played directly through a native AudioTrack channel. Whisper.cpp realtime sentence streaming and Eb Translator remain unchanged."
+            --title "Dual Translate v0.2.9" \
+            --notes "Local-only live translator flow modeled after the reference Dual Translator: Play opens one continuous session; Mic mutes/unmutes without destroying the session; Whisper.cpp streams provisional transcription at a 500 ms cadence and ships only completed sentences; local language detection keeps Staff fixed and updates Guest to the latest detected non-Staff language; non-Staff speech translates to Staff and Staff speech translates to the current Guest. Eb Translator now stays warm behind a persistent local llama.cpp server during the session, Speech Synthesys pauses microphone capture during direct AudioTrack playback, and listening resumes immediately afterward. No Gemini or cloud inference is used."
