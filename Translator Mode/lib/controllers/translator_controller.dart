@@ -8,6 +8,7 @@ import '../models/model_artifact.dart';
 import '../models/translation_language.dart';
 import '../models/translation_turn.dart';
 import '../services/eb_translator_model_installer.dart';
+import '../services/local_language_router.dart';
 import '../services/local_translator_service.dart';
 import '../services/offline_stt_service.dart';
 import '../services/supertonic_tts_service.dart';
@@ -18,19 +19,25 @@ class TranslatorController extends ChangeNotifier {
     LocalTranslatorService? translator,
     OfflineSttService? stt,
     SupertonicTtsService? tts,
+    LocalLanguageRouter? languageRouter,
   })  : _installer = installer ?? EbTranslatorModelInstaller(),
         _translator = translator ?? LocalTranslatorService(),
         _stt = stt ?? OfflineSttService(),
-        _tts = tts ?? SupertonicTtsService();
+        _tts = tts ?? SupertonicTtsService(),
+        _languageRouter = languageRouter ?? LocalLanguageRouter();
 
   final EbTranslatorModelInstaller _installer;
   final LocalTranslatorService _translator;
   final OfflineSttService _stt;
   final SupertonicTtsService _tts;
+  final LocalLanguageRouter _languageRouter;
 
   ModelArtifact? _artifact;
 
+  /// Language A is always the fixed Staff language.
   TranslationLanguage languageA = translationLanguages[0];
+
+  /// Language B is the latest paired non-Staff language.
   TranslationLanguage languageB = translationLanguages[1];
   TranslationSide? listeningSide;
 
@@ -38,6 +45,9 @@ class TranslatorController extends ChangeNotifier {
   bool generating = false;
   bool autoSpeak = true;
   bool medicalMode = true;
+  bool autoDetectGuestLanguage = true;
+  bool micMuted = false;
+  bool speechSynthesysSpeaking = false;
 
   bool installingEbTranslator = false;
   bool installingSpeechRecognition = false;
@@ -52,6 +62,7 @@ class TranslatorController extends ChangeNotifier {
   String ebTranslatorStatus = 'Pending';
   String speechRecognitionStatus = 'Pending';
   String speechSynthesysStatus = 'Pending';
+  String detectedLanguageStatus = '';
 
   String liveTranscript = '';
   String textA = '';
@@ -59,7 +70,7 @@ class TranslatorController extends ChangeNotifier {
   String? error;
 
   bool _voiceSessionActive = false;
-  TranslationSide? _sessionSide;
+  TranslationSide _speakerHint = TranslationSide.a;
   bool _processingSentenceQueue = false;
   final Queue<_QueuedSentence> _sentenceQueue = Queue<_QueuedSentence>();
 
@@ -79,8 +90,9 @@ class TranslatorController extends ChangeNotifier {
       speechRecognitionStatus == 'Ready' &&
       speechSynthesysStatus == 'Ready';
 
-  bool get busy => preparing || generating || listeningSide != null;
+  bool get busy => preparing || generating || speechSynthesysSpeaking;
   bool get voiceSessionActive => _voiceSessionActive;
+  TranslationSide get speakerHint => _speakerHint;
 
   TranslationSide? get lastOutputSide {
     if (_history.isEmpty) return null;
@@ -102,7 +114,9 @@ class TranslatorController extends ChangeNotifier {
     ready = allModelsReady;
     if (ready) {
       setupProgress = 1;
-      setupStatus = 'Offline models ready';
+      if (!_voiceSessionActive && !generating && !speechSynthesysSpeaking) {
+        setupStatus = 'Offline models ready';
+      }
     } else if (!preparing) {
       final missing = <String>[];
       if (ebTranslatorStatus != 'Ready') missing.add('Eb Translator');
@@ -134,6 +148,15 @@ class TranslatorController extends ChangeNotifier {
       speechRecognitionStatus = sttReady ? 'Ready' : 'Not installed';
       error = null;
       _syncReadyState();
+
+      // Warm the tiny local language detector tables during app startup so
+      // language routing does not add first-turn latency.
+      try {
+        await _languageRouter.initialize();
+      } catch (_) {
+        // Routing has a deterministic Staff/Guest fallback, so failure of the
+        // lightweight detector must never prevent the app from starting.
+      }
       notifyListeners();
     } catch (e) {
       error = e.toString();
@@ -161,7 +184,7 @@ class TranslatorController extends ChangeNotifier {
   }
 
   Future<void> installEbTranslator() async {
-    if (preparing || generating || listeningSide != null) return;
+    if (preparing || _voiceSessionActive || generating) return;
     installingEbTranslator = true;
     ready = false;
     error = null;
@@ -172,11 +195,7 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _stt.releaseRuntime();
-      await _tts.releaseRuntime();
-      await _translator.dispose();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-
+      await _releaseSessionRuntimes();
       final artifact = await _installer.install(onProgress: (progress, detail) {
         ebTranslatorProgress = progress.clamp(0.0, 1.0);
         ebTranslatorStatus = ebTranslatorProgress >= 0.999
@@ -201,7 +220,7 @@ class TranslatorController extends ChangeNotifier {
   }
 
   Future<void> installSpeechRecognition() async {
-    if (preparing || generating || listeningSide != null) return;
+    if (preparing || _voiceSessionActive || generating) return;
     installingSpeechRecognition = true;
     ready = false;
     error = null;
@@ -212,11 +231,7 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _tts.releaseRuntime();
-      await _translator.dispose();
-      await _stt.releaseRuntime();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-
+      await _releaseSessionRuntimes();
       await _stt.prepare(onProgress: (progress) {
         speechRecognitionProgress = progress.clamp(0.0, 1.0);
         speechRecognitionStatus = speechRecognitionProgress >= 0.999
@@ -240,7 +255,7 @@ class TranslatorController extends ChangeNotifier {
   }
 
   Future<void> installSpeechSynthesys() async {
-    if (preparing || generating || listeningSide != null) return;
+    if (preparing || _voiceSessionActive || generating) return;
     installingSpeechSynthesys = true;
     ready = false;
     error = null;
@@ -251,11 +266,7 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
 
     try {
-      await _stt.releaseRuntime();
-      await _translator.dispose();
-      await _tts.releaseRuntime();
-      await Future<void>.delayed(const Duration(milliseconds: 120));
-
+      await _releaseSessionRuntimes();
       await _tts.prepare(onProgress: (done, total, file, fileProgress) {
         final aggregate = total == 0 ? 0.0 : (done + fileProgress) / total;
         speechSynthesysProgress = aggregate.clamp(0.0, 1.0);
@@ -289,29 +300,27 @@ class TranslatorController extends ChangeNotifier {
   }
 
   void setLanguage(TranslationSide side, TranslationLanguage language) {
-    if (listeningSide != null || generating) return;
+    if (_voiceSessionActive || generating || preparing) return;
     if (side == TranslationSide.a) {
-      if (language.code == languageB.code) {
-        languageB = languageA;
-      }
+      if (_sameLanguage(language, languageB)) languageB = languageA;
       languageA = language;
     } else {
-      if (language.code == languageA.code) {
-        languageA = languageB;
-      }
+      if (_sameLanguage(language, languageA)) languageA = languageB;
       languageB = language;
     }
+    detectedLanguageStatus = '';
     notifyListeners();
   }
 
   void swapLanguages() {
-    if (listeningSide != null || generating) return;
+    if (_voiceSessionActive || generating || preparing) return;
     final oldA = languageA;
     languageA = languageB;
     languageB = oldA;
     final oldTextA = textA;
     textA = textB;
     textB = oldTextA;
+    _speakerHint = TranslationSide.a;
     notifyListeners();
   }
 
@@ -321,55 +330,127 @@ class TranslatorController extends ChangeNotifier {
   }
 
   void setMedicalMode(bool value) {
-    if (listeningSide != null || generating) return;
+    if (_voiceSessionActive || generating) return;
     medicalMode = value;
     notifyListeners();
   }
 
-  Future<void> toggleListening(TranslationSide side) async {
-    if (!ready || preparing) return;
-    error = null;
+  void setAutoDetectGuestLanguage(bool value) {
+    if (_voiceSessionActive || generating) return;
+    autoDetectGuestLanguage = value;
+    detectedLanguageStatus = '';
+    notifyListeners();
+  }
 
-    if (_voiceSessionActive || listeningSide != null) {
-      _voiceSessionActive = false;
-      _sessionSide = null;
-      _sentenceQueue.clear();
-      await stopListening(submitTranscript: true);
-      return;
+  /// Play button behavior: one persistent local translation session.
+  Future<void> toggleVoiceSession({TranslationSide hint = TranslationSide.a}) async {
+    if (_voiceSessionActive) {
+      await stopVoiceSession(flushTranscript: true);
+    } else {
+      await startVoiceSession(hint: hint);
     }
-    if (generating) return;
+  }
 
+  Future<void> startVoiceSession({TranslationSide hint = TranslationSide.a}) async {
+    if (!ready || preparing || generating || _voiceSessionActive) return;
+    error = null;
     _voiceSessionActive = true;
-    _sessionSide = side;
+    micMuted = false;
+    _speakerHint = hint;
+    setupStatus = 'Starting local live session…';
+    notifyListeners();
+
     try {
-      await _startListening(side);
+      // Warm long-lived STT + translator contexts once. This is the local
+      // equivalent of opening one Gemini Live session, without any cloud call.
+      final artifact = await _requireArtifact();
+      await _stt.warmRuntime();
+      setupStatus = 'Warming Eb Translator…';
+      notifyListeners();
+      await _translator.load(artifact);
+      await _startListening();
     } catch (e) {
       _voiceSessionActive = false;
-      _sessionSide = null;
+      micMuted = false;
       listeningSide = null;
       error = e.toString();
       setupStatus = 'Offline models ready';
+      await _releaseSessionRuntimes();
       notifyListeners();
     }
   }
 
-  Future<void> _startListening(TranslationSide side) async {
-    if (!_voiceSessionActive || generating || preparing) return;
+  /// Microphone behavior while a session is running: mute/unmute only.
+  Future<void> toggleMicMute({TranslationSide? hint}) async {
+    if (!ready || preparing) return;
+    if (!_voiceSessionActive) {
+      await startVoiceSession(hint: hint ?? _speakerHint);
+      return;
+    }
+    if (speechSynthesysSpeaking || generating) return;
 
-    await _translator.dispose();
-    await _tts.releaseRuntime();
+    if (micMuted) {
+      micMuted = false;
+      if (hint != null) _speakerHint = hint;
+      await _startListening();
+      return;
+    }
 
-    liveTranscript = '';
-    listeningSide = side;
-    setupStatus = 'Loading Speech Recognition…';
+    micMuted = true;
+    final captured = await _pauseListeningCapture();
+    setupStatus = 'Microphone muted · session remains active';
+    notifyListeners();
+    if (SentenceEndpointDetector.isSubstantial(captured)) {
+      _enqueueSentenceUtterance(captured, hint: hint ?? _speakerHint);
+    }
+  }
+
+  /// Backward-compatible mic entry point used by older UI code.
+  Future<void> toggleListening(TranslationSide side) => toggleMicMute(hint: side);
+
+  Future<void> stopVoiceSession({bool flushTranscript = true}) async {
+    if (!_voiceSessionActive && listeningSide == null) return;
+    final hint = _speakerHint;
+    final captured = await _pauseListeningCapture();
+    _voiceSessionActive = false;
+    micMuted = false;
+    _sentenceQueue.clear();
+    setupStatus = 'Stopping local live session…';
     notifyListeners();
 
-    final sourceLanguage = side == TranslationSide.a ? languageA : languageB;
-    _stt.setLanguageTag(sourceLanguage.sttCode);
+    if (flushTranscript && SentenceEndpointDetector.isSubstantial(captured)) {
+      final pieces = SentenceEndpointDetector.splitForShipping(captured);
+      for (final sentence in pieces) {
+        await _routeAndTranslate(sentence, hint: hint);
+      }
+    }
+
+    await _releaseSessionRuntimes();
+    setupStatus = 'Offline models ready';
+    notifyListeners();
+  }
+
+  Future<void> _startListening() async {
+    if (!_voiceSessionActive || micMuted || generating || speechSynthesysSpeaking) {
+      return;
+    }
+
+    liveTranscript = '';
+    listeningSide = _speakerHint;
+    setupStatus = autoDetectGuestLanguage
+        ? 'Listening · automatic language routing'
+        : 'Listening · ${_languageForHint().displayName}';
+    notifyListeners();
+
+    _stt.setLanguageTag(
+      autoDetectGuestLanguage ? 'auto' : _languageForHint().sttCode,
+    );
     await _stt.startListening(
       (text) {
         liveTranscript = text.trim();
-        if (side == TranslationSide.a) {
+        // The exact language is finalized at the sentence boundary. Use the
+        // expected side only for provisional visual feedback.
+        if (_speakerHint == TranslationSide.a) {
           textA = liveTranscript;
         } else {
           textB = liveTranscript;
@@ -377,25 +458,26 @@ class TranslatorController extends ChangeNotifier {
         notifyListeners();
       },
       onSentence: (utterance) {
-        _enqueueSentenceUtterance(side, utterance);
+        _enqueueSentenceUtterance(utterance, hint: _speakerHint);
       },
     );
-    setupStatus = 'Listening · sentence streaming';
     notifyListeners();
   }
 
-  void _enqueueSentenceUtterance(TranslationSide side, String utterance) {
-    if (!_voiceSessionActive || listeningSide != side) return;
+  TranslationLanguage _languageForHint() =>
+      _speakerHint == TranslationSide.a ? languageA : languageB;
+
+  void _enqueueSentenceUtterance(
+    String utterance, {
+    required TranslationSide hint,
+  }) {
+    if (!_voiceSessionActive || micMuted) return;
     final sentences = SentenceEndpointDetector.splitForShipping(utterance);
     for (final sentence in sentences) {
       final value = sentence.trim();
-      if (value.isNotEmpty) {
-        _sentenceQueue.add(_QueuedSentence(side, value));
-      }
+      if (value.isNotEmpty) _sentenceQueue.add(_QueuedSentence(hint, value));
     }
-    if (_sentenceQueue.isNotEmpty) {
-      unawaited(_processSentenceQueue());
-    }
+    if (_sentenceQueue.isNotEmpty) unawaited(_processSentenceQueue());
   }
 
   Future<void> _processSentenceQueue() async {
@@ -404,37 +486,36 @@ class TranslatorController extends ChangeNotifier {
 
     try {
       if (listeningSide != null) {
-        await _stt.stopListening();
-        listeningSide = null;
-        liveTranscript = '';
-        await _stt.releaseRuntime();
+        await _pauseListeningCapture();
         setupStatus = 'Sentence finalized';
         notifyListeners();
       }
 
-      while (_sentenceQueue.isNotEmpty && _voiceSessionActive) {
+      while (_sentenceQueue.isNotEmpty) {
         final item = _sentenceQueue.removeFirst();
-        await translate(item.side, item.text);
+        await _routeAndTranslate(item.text, hint: item.hint);
       }
     } catch (e) {
       error = e.toString();
-      setupStatus = 'Offline models ready';
+      setupStatus = _voiceSessionActive
+          ? 'Live session paused after an error'
+          : 'Offline models ready';
       notifyListeners();
     } finally {
       _processingSentenceQueue = false;
     }
 
     if (_voiceSessionActive &&
-        _sessionSide != null &&
+        !micMuted &&
         _sentenceQueue.isEmpty &&
         !generating &&
+        !speechSynthesysSpeaking &&
         ready) {
       try {
-        await Future<void>.delayed(const Duration(milliseconds: 180));
-        await _startListening(_sessionSide!);
+        await Future<void>.delayed(const Duration(milliseconds: 80));
+        await _startListening();
       } catch (e) {
         _voiceSessionActive = false;
-        _sessionSide = null;
         listeningSide = null;
         error = e.toString();
         setupStatus = 'Offline models ready';
@@ -443,47 +524,96 @@ class TranslatorController extends ChangeNotifier {
     }
   }
 
-  Future<void> stopListening({bool submitTranscript = false}) async {
-    final side = listeningSide;
-    if (side == null) return;
-
-    final beforeStop = liveTranscript.trim();
+  Future<String> _pauseListeningCapture() async {
+    if (listeningSide == null) return liveTranscript.trim();
+    final before = liveTranscript.trim();
+    String finalText = before;
     try {
-      await _stt.stopListening();
+      final flushed = await _stt.pauseListening();
+      if (flushed.trim().isNotEmpty) finalText = flushed.trim();
     } catch (e) {
       error = e.toString();
     }
-
     listeningSide = null;
-    final afterStop = liveTranscript.trim();
-    final text = afterStop.isNotEmpty ? afterStop : beforeStop;
     liveTranscript = '';
-
-    await _stt.releaseRuntime();
-    setupStatus = 'Offline models ready';
     notifyListeners();
+    return finalText;
+  }
 
-    if (submitTranscript && text.isNotEmpty) {
-      final sentences = SentenceEndpointDetector.splitForShipping(text);
-      for (final sentence in sentences) {
-        await translate(side, sentence);
+  Future<void> stopListening({bool submitTranscript = false}) async {
+    final hint = _speakerHint;
+    final text = await _pauseListeningCapture();
+    if (submitTranscript && SentenceEndpointDetector.isSubstantial(text)) {
+      for (final sentence in SentenceEndpointDetector.splitForShipping(text)) {
+        await _routeAndTranslate(sentence, hint: hint);
       }
     }
   }
 
-  Future<void> translate(TranslationSide sourceSide, String rawText) async {
+  Future<void> _routeAndTranslate(
+    String rawText, {
+    required TranslationSide hint,
+  }) async {
     final text = rawText.trim();
-    if (!ready || text.isEmpty || generating || preparing) return;
-    if (listeningSide != null) {
-      await stopListening(submitTranscript: false);
+    if (text.isEmpty) return;
+
+    final route = await _languageRouter.route(
+      text: text,
+      staffLanguage: languageA,
+      guestLanguage: languageB,
+      hintSide: hint,
+      autoDetect: autoDetectGuestLanguage,
+    );
+
+    if (!_sameLanguage(route.guestLanguage, languageB) &&
+        !_sameLanguage(route.guestLanguage, languageA)) {
+      languageB = route.guestLanguage;
     }
+
+    final sourceSide = _sameLanguage(route.source, languageA)
+        ? TranslationSide.a
+        : TranslationSide.b;
+    detectedLanguageStatus = route.usedFallback
+        ? '${route.source.displayName} · direction hint'
+        : '${route.source.displayName} · detected locally';
+
+    await _translateWithLanguages(
+      sourceSide: sourceSide,
+      source: route.source,
+      target: route.target,
+      text: text,
+    );
+
+    // Conversation partners normally alternate. This is only a low-confidence
+    // hint for very short utterances; local language detection still overrides
+    // it whenever it has a confident result.
+    _speakerHint = sourceSide == TranslationSide.a
+        ? TranslationSide.b
+        : TranslationSide.a;
+  }
+
+  Future<void> translate(TranslationSide sourceSide, String rawText) async {
+    final source = sourceSide == TranslationSide.a ? languageA : languageB;
+    final target = sourceSide == TranslationSide.a ? languageB : languageA;
+    await _translateWithLanguages(
+      sourceSide: sourceSide,
+      source: source,
+      target: target,
+      text: rawText.trim(),
+    );
+  }
+
+  Future<void> _translateWithLanguages({
+    required TranslationSide sourceSide,
+    required TranslationLanguage source,
+    required TranslationLanguage target,
+    required String text,
+  }) async {
+    if (!ready || text.isEmpty || generating || preparing) return;
+    if (listeningSide != null) await _pauseListeningCapture();
 
     error = null;
     generating = true;
-
-    final source = sourceSide == TranslationSide.a ? languageA : languageB;
-    final target = sourceSide == TranslationSide.a ? languageB : languageA;
-
     if (sourceSide == TranslationSide.a) {
       textA = text;
       textB = '';
@@ -491,22 +621,20 @@ class TranslatorController extends ChangeNotifier {
       textB = text;
       textA = '';
     }
-
-    setupStatus = 'Loading Eb Translator…';
+    setupStatus = medicalMode ? 'Translating · Medical' : 'Translating';
     notifyListeners();
 
     var answer = '';
     try {
-      await _stt.releaseRuntime();
-      await _tts.releaseRuntime();
       final artifact = await _requireArtifact();
       if (!_translator.isLoaded) {
+        setupStatus = 'Warming Eb Translator…';
+        notifyListeners();
         await _translator.load(artifact);
       }
 
       setupStatus = medicalMode ? 'Translating · Medical' : 'Translating';
       notifyListeners();
-
       await for (final token in _translator.translate(
         source: source,
         target: target,
@@ -526,7 +654,6 @@ class TranslatorController extends ChangeNotifier {
       if (answer.isEmpty) {
         throw StateError('Eb Translator returned an empty translation.');
       }
-
       if (sourceSide == TranslationSide.a) {
         textB = answer;
       } else {
@@ -545,15 +672,25 @@ class TranslatorController extends ChangeNotifier {
       notifyListeners();
 
       if (autoSpeak) {
-        setupStatus = 'Preparing Speech Synthesys…';
+        speechSynthesysSpeaking = true;
+        setupStatus = 'Speaking · Speech Synthesys';
         notifyListeners();
-        await _translator.dispose();
-        await _tts.speak(answer, language: target.ttsCode);
+        try {
+          await _tts.speak(answer, language: target.ttsCode);
+        } catch (ttsError) {
+          // A speaker/playback issue must not kill the live translation
+          // session or discard the successfully generated translation.
+          error = 'Speech Synthesys playback failed: $ttsError';
+        } finally {
+          speechSynthesysSpeaking = false;
+        }
       }
-      setupStatus = 'Offline models ready';
+      setupStatus = _voiceSessionActive
+          ? (micMuted ? 'Microphone muted · session active' : 'Live session active')
+          : 'Offline models ready';
     } catch (e) {
       error = e.toString();
-      setupStatus = 'Offline models ready';
+      setupStatus = _voiceSessionActive ? 'Live session active' : 'Offline models ready';
     } finally {
       generating = false;
       notifyListeners();
@@ -565,28 +702,38 @@ class TranslatorController extends ChangeNotifier {
     final language = side == TranslationSide.a ? languageA : languageB;
     if (text.trim().isEmpty) return;
 
+    final shouldResume = _voiceSessionActive && !micMuted;
     try {
       error = null;
-      setupStatus = 'Preparing Speech Synthesys…';
+      if (listeningSide != null) await _pauseListeningCapture();
+      speechSynthesysSpeaking = true;
+      setupStatus = 'Speaking · Speech Synthesys';
       notifyListeners();
-      await _stt.releaseRuntime();
-      await _translator.dispose();
       await _tts.speak(text, language: language.ttsCode);
-      setupStatus = 'Offline models ready';
     } catch (e) {
-      error = e.toString();
-      setupStatus = 'Offline models ready';
+      error = 'Speech Synthesys playback failed: $e';
+    } finally {
+      speechSynthesysSpeaking = false;
+      setupStatus = _voiceSessionActive ? 'Live session active' : 'Offline models ready';
       notifyListeners();
+    }
+
+    if (shouldResume && _voiceSessionActive && !micMuted) {
+      await _startListening();
     }
   }
 
   Future<void> stopGeneration() async {
     _voiceSessionActive = false;
-    _sessionSide = null;
+    micMuted = false;
     _sentenceQueue.clear();
+    await _stt.pauseListening();
+    listeningSide = null;
     await _translator.stop();
-    await _translator.dispose();
+    await _tts.stop();
     generating = false;
+    speechSynthesysSpeaking = false;
+    await _releaseSessionRuntimes();
     setupStatus = 'Offline models ready';
     notifyListeners();
   }
@@ -596,17 +743,38 @@ class TranslatorController extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// Reset conversation state without disconnecting an active live session.
   void clearConversation() {
-    if (listeningSide != null || generating) return;
-    _voiceSessionActive = false;
-    _sessionSide = null;
     _sentenceQueue.clear();
     textA = '';
     textB = '';
     liveTranscript = '';
     _history.clear();
+    detectedLanguageStatus = '';
     error = null;
     notifyListeners();
+  }
+
+  Future<void> _releaseSessionRuntimes() async {
+    try {
+      await _stt.releaseRuntime();
+    } catch (_) {}
+    try {
+      await _translator.dispose();
+    } catch (_) {}
+    try {
+      await _tts.releaseRuntime();
+    } catch (_) {}
+  }
+
+  bool _sameLanguage(TranslationLanguage a, TranslationLanguage b) {
+    String base(String code) {
+      final value = code.toLowerCase().replaceAll('_', '-');
+      if (value.startsWith('fil') || value == 'tl') return 'tl';
+      if (value.startsWith('nl')) return 'nl';
+      return value.split('-').first;
+    }
+    return base(a.code) == base(b.code);
   }
 
   @override
@@ -622,8 +790,8 @@ class TranslatorController extends ChangeNotifier {
 }
 
 class _QueuedSentence {
-  const _QueuedSentence(this.side, this.text);
+  const _QueuedSentence(this.hint, this.text);
 
-  final TranslationSide side;
+  final TranslationSide hint;
   final String text;
 }
