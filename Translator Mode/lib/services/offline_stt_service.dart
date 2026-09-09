@@ -1,162 +1,170 @@
 import 'dart:async';
+import 'dart:io';
 
-import 'package:whisper_cpp_flutter_plus/whisper_cpp_flutter_plus.dart';
+import 'package:flutter/services.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 class OfflineSttService {
-  static const WhisperModelDescriptor _speechModel = WhisperModelCatalog.base;
+  static const MethodChannel _methods = MethodChannel(
+    'ai.eburon.dual_translate/on_device_stt',
+  );
+  static const EventChannel _events = EventChannel(
+    'ai.eburon.dual_translate/on_device_stt_events',
+  );
 
-  final WhisperModelManager _models = WhisperModelManager();
-
-  WhisperEngine? _engine;
-  WhisperStreamTask? _task;
-  StreamSubscription<WhisperStreamUpdate>? _updates;
+  StreamSubscription<dynamic>? _subscription;
+  Completer<void>? _finalCompleter;
   void Function(String text)? _onText;
-  String _lastText = '';
+  bool _listening = false;
+  String _languageTag = 'en-US';
+  String? _lastError;
+
+  void setLanguageTag(String languageTag) {
+    _languageTag = languageTag;
+  }
 
   Future<bool> modelsReady() async {
+    if (!Platform.isAndroid) return false;
     try {
-      return await _models.findCatalogModel(_speechModel) != null;
-    } on FormatException {
+      return await _methods.invokeMethod<bool>('isAvailable') ?? false;
+    } on PlatformException {
       return false;
     }
   }
 
-  /// Installs only the Speech Recognition model.
-  ///
-  /// The whisper.cpp model manager uses a checksum-pinned catalog and
-  /// resumable downloads, so an interrupted download can continue later
-  /// without restarting the other local AI models.
+  /// Android Speech Recognition is provided by the device itself.
+  /// No separate STT model is downloaded by Dual Translate.
   Future<void> prepare({required void Function(double progress) onProgress}) async {
-    var cached = await _verifiedModelOrNull();
-    if (cached != null) {
-      onProgress(1);
-      return;
-    }
-
-    await for (final progress in _models.downloadCatalogModel(_speechModel)) {
-      onProgress((progress.fraction ?? 0.0).clamp(0.0, 1.0));
-    }
-
-    cached = await _verifiedModelOrNull();
-    if (cached == null) {
-      throw StateError('Speech Recognition model download did not verify.');
+    onProgress(0.2);
+    if (!await modelsReady()) {
+      throw StateError(
+        'Android on-device Speech Recognition is unavailable on this device. '
+        'Install or enable the device offline speech recognition service/language pack.',
+      );
     }
     onProgress(1);
   }
 
   Future<void> initialize({void Function(double progress)? onProgress}) async {
-    if (_engine != null) return;
-
-    onProgress?.call(0);
-    final model = await _verifiedModelOrNull();
-    if (model == null) {
-      throw StateError('Speech Recognition model is not installed.');
-    }
-
-    try {
-      _engine = await WhisperEngine.load(
-        model.path,
-        config: const WhisperConfig(
-          useGpu: true,
-          useFlashAttention: true,
-        ),
-      );
-    } catch (_) {
-      _engine = await WhisperEngine.load(
-        model.path,
-        config: const WhisperConfig(
-          useGpu: false,
-          useFlashAttention: true,
-        ),
-      );
+    onProgress?.call(0.2);
+    if (!await modelsReady()) {
+      throw StateError('Android on-device Speech Recognition is unavailable.');
     }
     onProgress?.call(1);
   }
 
   Future<void> startListening(void Function(String text) onText) async {
-    await stopListening();
-    if (_engine == null) await initialize();
-
-    _onText = onText;
-    _lastText = '';
-
-    final engine = _engine;
-    if (engine == null) {
-      throw StateError('Speech Recognition failed to initialize.');
+    if (!Platform.isAndroid) {
+      throw UnsupportedError(
+        'This build uses Android on-device Speech Recognition.',
+      );
     }
 
-    final task = await engine.transcribeMicrophone(
-      options: const TranscribeOptions(
-        language: 'auto',
-        detectLanguage: true,
-        threads: 4,
-        noContext: true,
-        tokenTimestamps: false,
-        noTimestamps: true,
-        suppressBlank: true,
-      ),
-      config: const WhisperStreamConfig(
-        updateInterval: Duration(milliseconds: 1200),
-        windowDuration: Duration(seconds: 20),
-        confirmationLag: Duration(milliseconds: 2500),
-      ),
+    final permission = await Permission.microphone.request();
+    if (!permission.isGranted) {
+      throw StateError('Microphone permission was denied.');
+    }
+
+    if (!await modelsReady()) {
+      throw StateError(
+        'Android on-device Speech Recognition is not available. '
+        'No cloud fallback is allowed in this build.',
+      );
+    }
+
+    await stopListening();
+    _onText = onText;
+    _lastError = null;
+    _finalCompleter = Completer<void>();
+
+    _subscription = _events.receiveBroadcastStream().listen(
+      (dynamic raw) {
+        if (raw is! Map) return;
+        final event = Map<Object?, Object?>.from(raw);
+        final type = event['type']?.toString();
+        if (type == 'result') {
+          final text = event['text']?.toString().trim() ?? '';
+          if (text.isNotEmpty) _onText?.call(text);
+          final isFinal = event['final'] == true;
+          if (isFinal && !(_finalCompleter?.isCompleted ?? true)) {
+            _finalCompleter?.complete();
+          }
+        } else if (type == 'error') {
+          final code = event['code'] as int? ?? -1;
+          final message = event['message']?.toString() ?? 'Speech Recognition error';
+          if (code != 6 && code != 7) {
+            _lastError = message;
+          }
+          if (!(_finalCompleter?.isCompleted ?? true)) {
+            _finalCompleter?.complete();
+          }
+        }
+      },
+      onError: (Object error) {
+        _lastError = error.toString();
+        if (!(_finalCompleter?.isCompleted ?? true)) {
+          _finalCompleter?.complete();
+        }
+      },
     );
 
-    _task = task;
-    _updates = task.updates.listen(
-      (update) {
-        final text = update.text.trim();
-        if (text.isEmpty || text == _lastText) return;
-        _lastText = text;
-        _onText?.call(text);
-      },
-      onError: (Object error, StackTrace stackTrace) {},
-    );
+    try {
+      await _methods.invokeMethod<void>('start', <String, Object>{
+        'languageTag': _languageTag,
+      });
+      _listening = true;
+    } catch (_) {
+      await _subscription?.cancel();
+      _subscription = null;
+      _onText = null;
+      rethrow;
+    }
   }
 
   Future<void> stopListening() async {
-    final task = _task;
-    if (task == null) {
-      await _updates?.cancel();
-      _updates = null;
+    if (!_listening) {
+      await _subscription?.cancel();
+      _subscription = null;
       return;
     }
 
     try {
-      final finalUpdate = await task.stop();
-      final finalText = finalUpdate.text.trim();
-      if (finalText.isNotEmpty) {
-        _lastText = finalText;
-        _onText?.call(finalText);
+      await _methods.invokeMethod<void>('stop');
+      final completer = _finalCompleter;
+      if (completer != null && !completer.isCompleted) {
+        try {
+          await completer.future.timeout(const Duration(milliseconds: 1400));
+        } on TimeoutException {
+          // Some OEM recognizers do not emit an explicit final callback after
+          // stopListening. The latest partial transcript is still preserved.
+        }
       }
     } finally {
-      await _updates?.cancel();
-      _updates = null;
-      _task = null;
+      _listening = false;
+      await _subscription?.cancel();
+      _subscription = null;
       _onText = null;
+      _finalCompleter = null;
     }
+
+    final failure = _lastError;
+    _lastError = null;
+    if (failure != null) throw StateError(failure);
   }
 
-  /// Releases whisper.cpp native memory while keeping the downloaded model
-  /// file available for the next microphone turn.
   Future<void> releaseRuntime() async {
-    await stopListening();
-    _engine?.dispose();
-    _engine = null;
-    _lastText = '';
-  }
-
-  Future<void> dispose() async {
-    await releaseRuntime();
-    _models.close();
-  }
-
-  Future<dynamic> _verifiedModelOrNull() async {
     try {
-      return await _models.findCatalogModel(_speechModel);
-    } on FormatException {
-      await _models.delete(_speechModel.fileName);
-      return null;
+      await stopListening();
+    } finally {
+      if (Platform.isAndroid) {
+        try {
+          await _methods.invokeMethod<void>('destroy');
+        } on PlatformException {
+          // The recognizer may already have been destroyed by Android.
+        }
+      }
     }
   }
+
+  Future<void> dispose() => releaseRuntime();
 }
