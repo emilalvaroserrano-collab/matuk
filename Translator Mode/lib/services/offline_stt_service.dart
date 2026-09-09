@@ -7,13 +7,18 @@ import '../core/sentence_endpoint_detector.dart';
 
 class OfflineSttService {
   static const WhisperModelDescriptor _model = WhisperModelCatalog.base;
+
+  // The reference live translator sends ~128 ms PCM chunks and keeps a
+  // continuous session. Whisper needs a little more audio per decode, but a
+  // 500 ms inference cadence keeps the UI responsive without translating
+  // unstable partial words.
   static const WhisperStreamConfig _streamConfig = WhisperStreamConfig(
-    updateInterval: Duration(milliseconds: 850),
-    windowDuration: Duration(seconds: 15),
-    confirmationLag: Duration(milliseconds: 1600),
+    updateInterval: Duration(milliseconds: 500),
+    windowDuration: Duration(seconds: 12),
+    confirmationLag: Duration(milliseconds: 1000),
   );
-  static const Duration _punctuatedEndpointDelay = Duration(milliseconds: 850);
-  static const Duration _silenceEndpointDelay = Duration(milliseconds: 1450);
+  static const Duration _punctuatedEndpointDelay = Duration(milliseconds: 450);
+  static const Duration _silenceEndpointDelay = Duration(milliseconds: 1100);
 
   final WhisperModelManager _models = WhisperModelManager();
 
@@ -25,12 +30,15 @@ class OfflineSttService {
   void Function(String text)? _onText;
   void Function(String sentence)? _onSentence;
 
-  String _languageTag = 'en-US';
+  String _languageTag = 'auto';
   String _latestText = '';
   String? _lastError;
   bool _listening = false;
   bool _sentenceEmitted = false;
   bool _suppressSentenceCallbacks = false;
+
+  bool get runtimeLoaded => _engine != null;
+  bool get listening => _listening;
 
   void setLanguageTag(String languageTag) {
     _languageTag = languageTag;
@@ -74,10 +82,10 @@ class OfflineSttService {
     onProgress?.call(1);
   }
 
+  Future<void> warmRuntime() => _ensureEngineLoaded();
+
   Future<void> _ensureEngineLoaded() async {
-    if (_engine != null) {
-      return;
-    }
+    if (_engine != null) return;
     final modelFile = await _verifiedModel();
     if (modelFile == null) {
       throw StateError('Speech Recognition model is not installed.');
@@ -110,6 +118,8 @@ class OfflineSttService {
       throw StateError('Speech Recognition model is not installed.');
     }
 
+    // Stop only the active microphone stream. Keep the Whisper model loaded so
+    // the next turn resumes without model startup latency.
     await _stopStream(suppressSentenceCallbacks: true);
     await _ensureEngineLoaded();
 
@@ -122,6 +132,7 @@ class OfflineSttService {
 
     final options = TranscribeOptions(
       language: _whisperLanguageCode(_languageTag),
+      detectLanguage: _languageTag.trim().toLowerCase() == 'auto',
       tokenTimestamps: false,
       noTimestamps: true,
       suppressNonSpeechTokens: true,
@@ -148,49 +159,48 @@ class OfflineSttService {
       _onText?.call(display);
     }
 
-    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) {
-      return;
-    }
-    if (!SentenceEndpointDetector.isSubstantial(display)) {
-      return;
-    }
+    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) return;
+    if (!SentenceEndpointDetector.isSubstantial(display)) return;
 
     if (display != _latestText) {
       _latestText = display;
       _sentenceTimer?.cancel();
+      final stableText = update.confirmedText.trim().isNotEmpty
+          ? update.confirmedText
+          : display;
       final delay = SentenceEndpointDetector.endsWithTerminalPunctuation(
-        update.confirmedText,
+        stableText,
       )
           ? _punctuatedEndpointDelay
           : _silenceEndpointDelay;
       _sentenceTimer = Timer(delay, _emitLatestSentence);
     }
 
-    if (update.isFinal) {
-      _emitLatestSentence();
-    }
+    if (update.isFinal) _emitLatestSentence();
   }
 
   void _emitLatestSentence() {
-    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) {
-      return;
-    }
+    if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) return;
     final sentence = _latestText.trim();
-    if (!SentenceEndpointDetector.isSubstantial(sentence)) {
-      return;
-    }
+    if (!SentenceEndpointDetector.isSubstantial(sentence)) return;
     _sentenceEmitted = true;
     _sentenceTimer?.cancel();
     scheduleMicrotask(() => _onSentence?.call(sentence));
   }
 
-  Future<void> stopListening() async {
+  /// Pauses microphone capture while retaining the loaded Whisper model.
+  Future<String> pauseListening() async {
+    final before = _latestText.trim();
     await _stopStream(suppressSentenceCallbacks: true);
+    final after = _latestText.trim();
     final failure = _lastError;
     _lastError = null;
-    if (failure != null) {
-      throw StateError(failure);
-    }
+    if (failure != null) throw StateError(failure);
+    return after.isNotEmpty ? after : before;
+  }
+
+  Future<void> stopListening() async {
+    await pauseListening();
   }
 
   Future<void> _stopStream({required bool suppressSentenceCallbacks}) async {
@@ -238,30 +248,17 @@ class OfflineSttService {
 
   String _whisperLanguageCode(String languageTag) {
     final normalized = languageTag.trim().toLowerCase();
+    if (normalized.isEmpty || normalized == 'auto') return 'auto';
     if (normalized.startsWith('fil') || normalized.startsWith('tl')) {
       return 'tl';
     }
-    if (normalized.startsWith('nl')) {
-      return 'nl';
-    }
-    if (normalized.startsWith('en')) {
-      return 'en';
-    }
-    if (normalized.startsWith('fr')) {
-      return 'fr';
-    }
-    if (normalized.startsWith('de')) {
-      return 'de';
-    }
-    if (normalized.startsWith('es')) {
-      return 'es';
-    }
-    if (normalized.startsWith('it')) {
-      return 'it';
-    }
-    if (normalized.startsWith('pt')) {
-      return 'pt';
-    }
+    if (normalized.startsWith('nl')) return 'nl';
+    if (normalized.startsWith('en')) return 'en';
+    if (normalized.startsWith('fr')) return 'fr';
+    if (normalized.startsWith('de')) return 'de';
+    if (normalized.startsWith('es')) return 'es';
+    if (normalized.startsWith('it')) return 'it';
+    if (normalized.startsWith('pt')) return 'pt';
     final language = normalized.split(RegExp('[-_]')).first;
     return language.isEmpty ? 'auto' : language;
   }
