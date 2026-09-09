@@ -5,23 +5,23 @@ import 'package:flutter/foundation.dart';
 import '../models/model_artifact.dart';
 import '../models/translation_language.dart';
 import '../models/translation_turn.dart';
+import '../services/eb_translator_model_installer.dart';
 import '../services/local_translator_service.dart';
 import '../services/offline_stt_service.dart';
-import '../services/ollama_model_installer.dart';
 import '../services/supertonic_tts_service.dart';
 
 class TranslatorController extends ChangeNotifier {
   TranslatorController({
-    OllamaModelInstaller? installer,
+    EbTranslatorModelInstaller? installer,
     LocalTranslatorService? translator,
     OfflineSttService? stt,
     SupertonicTtsService? tts,
-  })  : _installer = installer ?? OllamaModelInstaller(),
+  })  : _installer = installer ?? EbTranslatorModelInstaller(),
         _translator = translator ?? LocalTranslatorService(),
         _stt = stt ?? OfflineSttService(),
         _tts = tts ?? SupertonicTtsService();
 
-  final OllamaModelInstaller _installer;
+  final EbTranslatorModelInstaller _installer;
   final LocalTranslatorService _translator;
   final OfflineSttService _stt;
   final SupertonicTtsService _tts;
