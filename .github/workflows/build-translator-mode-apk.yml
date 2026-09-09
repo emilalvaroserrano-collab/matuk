@@ -45,11 +45,10 @@ jobs:
           grep -q '48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201' "Translator Mode/lib/core/model_constants.dart"
           grep -q '<|im_start|>assistant' "Translator Mode/lib/core/translation_prompt_renderer.dart"
           grep -q "Dual Translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "installEbTranslator" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "installSpeechRecognition" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "installSpeechSynthesys" "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q 'lib_llama_cpp: ^0.7.3' "Translator Mode/pubspec.yaml"
+          ! grep -q 'llama_flutter_android' "Translator Mode/pubspec.yaml"
+          ! grep -q 'llama_cpp_flutter:' "Translator Mode/pubspec.yaml"
           grep -q 'whisper_cpp_flutter_plus: ^0.4.1' "Translator Mode/pubspec.yaml"
-          ! grep -q 'sherpa_asr_sdk' "Translator Mode/pubspec.yaml"
           grep -q 'WhisperModelCatalog.base' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'downloadCatalogModel' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'transcribeMicrophone' "Translator Mode/lib/services/offline_stt_service.dart"
@@ -57,6 +56,8 @@ jobs:
           grep -q 'onSentence' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'SentenceEndpointDetector' "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q 'Listening · sentence streaming' "Translator Mode/lib/controllers/translator_controller.dart"
+          grep -q 'LibLlamaCpp' "Translator Mode/lib/services/local_translator_service.dart"
+          grep -q 'LlamaGenerateCommand' "Translator Mode/lib/services/local_translator_service.dart"
           grep -q 'version: 1.1.7+12' "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
@@ -97,6 +98,15 @@ jobs:
             echo 'ERROR: whisper.cpp native/runtime assets were not packaged'
             exit 1
           }
+          unzip -l "$APK" | grep 'lib/arm64-v8a/liblib_llama_cpp_android.so' >/dev/null || {
+            echo 'ERROR: isolated Eb Translator llama.cpp runtime is missing'
+            exit 1
+          }
+          GGML_BASE_COUNT=$(unzip -l "$APK" | grep -c 'lib/arm64-v8a/libggml-base.so' || true)
+          if [ "$GGML_BASE_COUNT" -ne 1 ]; then
+            echo "ERROR: expected exactly one libggml-base.so for Whisper, found $GGML_BASE_COUNT"
+            exit 1
+          fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -124,4 +134,4 @@ jobs:
             dual-translate-v0.2.7.apk.sha256 \
             --target "$GITHUB_SHA" \
             --title "Dual Translate v0.2.7" \
-            --notes "Speech Recognition now uses bundled whisper.cpp streaming through whisper_cpp_flutter_plus 0.4.1 with the checksum-pinned multilingual Whisper Base model. Live provisional transcripts update continuously, but Eb Translator receives only sentence-sized payloads after a punctuation-aware short pause or a natural silence endpoint. Manual microphone stop also flushes the current utterance and splits it into sentence payloads. The mic is stopped and the Whisper runtime is released before Eb Translator and Speech Synthesys run, then the streaming session resumes, preventing TTS self-hearing and avoiding simultaneous heavy-model memory pressure. Android SpeechRecognizer and its offline language-pack dependency are completely removed."
+            --notes "Speech Recognition uses realtime whisper.cpp streaming with the multilingual Whisper Base model. Provisional transcription updates continuously, while Eb Translator receives complete sentence payloads only after punctuation-aware or natural-silence endpointing. The mic and Whisper runtime are stopped before translation and Speech Synthesys playback, then the voice session resumes, preventing TTS self-hearing. Eb Translator now uses the isolated lib_llama_cpp Android runtime, eliminating the libggml-base.so collision between the previous Android llama wrapper and Whisper. Android SpeechRecognizer is removed."
