@@ -7,18 +7,63 @@ import '../core/translation_prompt_renderer.dart';
 import '../models/model_artifact.dart';
 import '../models/translation_language.dart';
 
+/// Persistent, fully local Eb Translator runtime.
+///
+/// The earlier implementation loaded and disposed the GGUF for every sentence.
+/// This service keeps llama.cpp loaded behind the package's loopback-only local
+/// server for the lifetime of a voice session, removing repeated model-load
+/// latency while preserving token streaming.
 class LocalTranslatorService {
+  static const _modelId = 'eb-translator';
+
   final _renderer = const TranslationPromptRenderer();
   ModelArtifact? _artifact;
-  bool _loaded = false;
+  LlamaHttpServer? _server;
+  LlamaServerClient? _client;
   bool _stopRequested = false;
+  Future<void>? _loading;
 
-  bool get isLoaded => _loaded;
+  bool get isLoaded => _server != null && _client != null;
 
   Future<void> load(ModelArtifact artifact) async {
-    _artifact = artifact;
-    _loaded = true;
-    _stopRequested = false;
+    if (isLoaded && _artifact?.path == artifact.path) {
+      _stopRequested = false;
+      return;
+    }
+    final inFlight = _loading;
+    if (inFlight != null) {
+      await inFlight;
+      if (isLoaded && _artifact?.path == artifact.path) return;
+    }
+
+    final completer = Completer<void>();
+    _loading = completer.future;
+    try {
+      await dispose();
+      final server = LlamaHttpServer.open(
+        config: LlamaServerConfig(
+          model: _modelId,
+          modelPath: artifact.path,
+          port: 0,
+        ),
+      );
+      final address = await server.start();
+      _server = server;
+      _client = LlamaServerClient(
+        baseUri: Uri.parse('http://${address.host}:${address.port}/v1'),
+      );
+      _artifact = artifact;
+      _stopRequested = false;
+      completer.complete();
+    } catch (e, st) {
+      _server = null;
+      _client = null;
+      _artifact = null;
+      completer.completeError(e, st);
+      rethrow;
+    } finally {
+      _loading = null;
+    }
   }
 
   Stream<String> translate({
@@ -27,54 +72,56 @@ class LocalTranslatorService {
     required String text,
     bool medicalMode = false,
   }) async* {
-    final artifact = _artifact;
-    if (!_loaded || artifact == null) {
+    final client = _client;
+    if (!isLoaded || client == null || _artifact == null) {
       throw StateError('Eb Translator is not loaded.');
     }
 
-    final prompt = _renderer.render(
+    _stopRequested = false;
+    final system = _renderer.systemInstructions(medicalMode: medicalMode);
+    final user = _renderer.userContent(
       source: source,
       target: target,
       text: text,
-      medicalMode: medicalMode,
     );
 
-    _stopRequested = false;
-    final runtime = const LibLlamaCpp();
-    final commands = Stream<LlamaCommand>.fromIterable([
-      LlamaLoadModelCommand(
-        modelPath: artifact.path,
-        contextSize: ModelConstants.contextSize,
-        gpuLayerCount: 0,
-      ),
-      LlamaGenerateCommand(
-        prompt: prompt,
-        maxTokens: ModelConstants.maxOutputTokens,
-        temperature: ModelConstants.temperature,
-        topP: ModelConstants.topP,
-        stop: const [ModelConstants.stopSequence],
-      ),
-      const LlamaDisposeCommand(),
-    ]);
-
-    try {
-      await for (final response in runtime.transform(commands)) {
-        if (_stopRequested) {
-          continue;
-        }
-        if (response is LlamaTokenResponse) {
-          if (response.text.isNotEmpty) {
-            yield response.text;
-          }
-        } else if (response is LlamaErrorResponse) {
-          throw StateError('Eb Translator inference failed: ${response.message}');
-        }
-      }
-    } finally {
-      _loaded = false;
-      _artifact = null;
-      _stopRequested = false;
+    await for (final event in client.streamChatCompletion(
+      model: _modelId,
+      messages: <Map<String, Object?>>[
+        <String, Object?>{'role': 'system', 'content': system},
+        <String, Object?>{'role': 'user', 'content': user},
+      ],
+      maxTokens: ModelConstants.maxOutputTokens,
+      temperature: ModelConstants.temperature,
+      topP: ModelConstants.topP,
+      stop: const [ModelConstants.stopSequence],
+    )) {
+      if (_stopRequested) continue;
+      final token = _extractDelta(event);
+      if (token.isNotEmpty) yield token;
     }
+  }
+
+  String _extractDelta(Map<String, Object?> event) {
+    final choices = event['choices'];
+    if (choices is! List || choices.isEmpty) return '';
+    final first = choices.first;
+    if (first is! Map) return '';
+    final delta = first['delta'];
+    if (delta is Map) {
+      final content = delta['content'];
+      if (content is String) return _cleanToken(content);
+    }
+    final text = first['text'];
+    if (text is String) return _cleanToken(text);
+    return '';
+  }
+
+  String _cleanToken(String token) {
+    return token
+        .replaceAll(ModelConstants.stopSequence, '')
+        .replaceAll('<|im_start|>', '')
+        .replaceAll('<|im_end|>', '');
   }
 
   Future<void> stop() async {
@@ -83,7 +130,12 @@ class LocalTranslatorService {
 
   Future<void> dispose() async {
     _stopRequested = true;
+    final server = _server;
+    _server = null;
+    _client = null;
     _artifact = null;
-    _loaded = false;
+    if (server != null) {
+      await server.close();
+    }
   }
 }
