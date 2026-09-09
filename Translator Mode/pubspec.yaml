@@ -1,15 +1,16 @@
 name: matuk_translator_mode
 description: Standalone dual translator based on the Matuk local Gemma 3, Sherpa STT, and Supertonic 3 stack.
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.1+2
 
 environment:
-  sdk: ">=3.9.0 <4.0.0"
+  sdk: ">=3.10.1 <4.0.0"
   flutter: ">=3.35.0"
 
 dependencies:
   flutter:
     sdk: flutter
+  audioplayers: ^6.8.1
   crypto: ^3.0.6
   http: ^1.5.0
   llama_cpp_flutter: ^0.8.0
@@ -17,7 +18,7 @@ dependencies:
   path_provider: ^2.1.5
   permission_handler: ^12.0.1
   sherpa_asr_sdk: ^1.0.0
-  supertonic_flutter: ^2.0.0
+  sherpa_onnx: 1.13.7
 
 dev_dependencies:
   flutter_test:
