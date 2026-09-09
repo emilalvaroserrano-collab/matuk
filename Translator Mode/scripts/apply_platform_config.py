@@ -15,21 +15,37 @@ if 'android.permission.RECORD_AUDIO' not in text:
     )
 manifest.write_text(text)
 
+# Current native dependencies (Sherpa, ONNX Runtime, Supertonic, llama.cpp)
+# require NDK 28.2. Use the highest requirement; Android NDKs are backward
+# compatible for these prebuilt/native plugin consumers.
+ndk_version = '28.2.13676358'
+
 kts = root / 'android/app/build.gradle.kts'
 if kts.exists():
     text = kts.read_text()
     text = re.sub(r'minSdk\s*=\s*flutter\.minSdkVersion', 'minSdk = 26', text)
     if 'ndkVersion' in text:
         text = re.sub(
-            r'ndkVersion\s*=\s*flutter\.ndkVersion',
-            'ndkVersion = "27.0.12077973"',
+            r'ndkVersion\s*=\s*(?:flutter\.ndkVersion|"[^"]+")',
+            f'ndkVersion = "{ndk_version}"',
             text,
         )
     else:
         text = text.replace(
             'compileSdk = flutter.compileSdkVersion',
-            'compileSdk = flutter.compileSdkVersion\n    ndkVersion = "27.0.12077973"',
+            f'compileSdk = flutter.compileSdkVersion\n    ndkVersion = "{ndk_version}"',
         )
+
+    # sherpa_onnx and flutter_onnxruntime both contribute libonnxruntime.so.
+    # Sherpa 1.13.5+ upgraded its bundled ORT to 1.27.1, so allow Android's
+    # packaging layer to keep the first (Sherpa) copy rather than fail on the
+    # duplicate path. This gives STT and Supertonic a single shared ORT library.
+    if 'pickFirsts += "**/libonnxruntime.so"' not in text:
+        packaging = '''    packaging {\n        jniLibs {\n            pickFirsts += "**/libonnxruntime.so"\n        }\n    }\n\n'''
+        if '    defaultConfig {' in text:
+            text = text.replace('    defaultConfig {', packaging + '    defaultConfig {', 1)
+        else:
+            raise RuntimeError('Unable to locate defaultConfig in build.gradle.kts')
     kts.write_text(text)
 else:
     gradle = root / 'android/app/build.gradle'
@@ -42,10 +58,14 @@ else:
         )
         if 'ndkVersion' in text:
             text = re.sub(
-                r'ndkVersion\s+flutter\.ndkVersion',
-                'ndkVersion "27.0.12077973"',
+                r'ndkVersion\s+(?:flutter\.ndkVersion|"[^"]+")',
+                f'ndkVersion "{ndk_version}"',
                 text,
             )
+        if "pickFirst '**/libonnxruntime.so'" not in text:
+            packaging = '''    packagingOptions {\n        jniLibs {\n            pickFirst '**/libonnxruntime.so'\n        }\n    }\n\n'''
+            if '    defaultConfig {' in text:
+                text = text.replace('    defaultConfig {', packaging + '    defaultConfig {', 1)
         gradle.write_text(text)
 
 proguard = root / 'android/app/proguard-rules.pro'
