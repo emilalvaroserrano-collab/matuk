@@ -45,7 +45,7 @@ jobs:
             gh release create "$TAG" \
               matuk-translator-mode-v0.1.0.apk \
               matuk-translator-mode-v0.1.0.apk.sha256 \
-              --target bf22a72515d4c6ffa004b2bcc9b268d86377ee0b \
+              --target "$GITHUB_SHA" \
               --title "Translator Mode v0.1.0" \
-              --notes "First Android release of Matuk Translator Mode. Verified from successful GitHub Actions build run #6. Local-first dual translator using Gemma 3 1B, offline Sherpa STT, and Supertonic 3 TTS. Models are prepared on first run."
+              --notes "First Android release of Matuk Translator Mode. APK verified from successful GitHub Actions build run #6 at commit bf22a72515d4c6ffa004b2bcc9b268d86377ee0b. Local-first dual translator using Gemma 3 1B, offline Sherpa STT, and Supertonic 3 TTS. Models are prepared on first run."
           fi
