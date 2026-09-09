@@ -35,8 +35,6 @@ class LocalTranslatorService {
 
     if (Platform.isIOS) {
       final runtime = ios_llama.createLlamaRuntime();
-      // Inference uses our exact raw SmolLM2 ChatML prompt below. The format
-      // value is required by ModelSpec metadata only.
       final format = ios_llama.resolveChatFormat('chatml') ??
           ios_llama.resolveChatFormat('gemma');
       if (format == null) {
@@ -72,9 +70,15 @@ class LocalTranslatorService {
     required TranslationLanguage source,
     required TranslationLanguage target,
     required String text,
+    bool medicalMode = false,
   }) async* {
     if (!_loaded) throw StateError('Eb Translator is not loaded.');
-    final prompt = _renderer.render(source: source, target: target, text: text);
+    final prompt = _renderer.render(
+      source: source,
+      target: target,
+      text: text,
+      medicalMode: medicalMode,
+    );
 
     if (Platform.isAndroid) {
       await _android!.clearContext();
