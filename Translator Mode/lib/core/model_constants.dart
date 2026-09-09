@@ -14,6 +14,9 @@ class ModelConstants {
   static const temperature = 1.0;
   static const topK = 64;
   static const topP = 0.95;
-  static const contextSize = 4096;
-  static const maxOutputTokens = 512;
+
+  // Translation turns are short, so a 2K context materially lowers mobile KV
+  // cache RAM without changing the exact Ollama gemma3:1b model weights.
+  static const contextSize = 2048;
+  static const maxOutputTokens = 384;
 }
