@@ -54,7 +54,9 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
     final out = StringBuffer();
     for (final turn in controller.history.reversed) {
       out
-        ..writeln('${turn.sourceLanguage.displayName} → ${turn.targetLanguage.displayName}')
+        ..writeln(
+          '${turn.sourceLanguage.displayName} → ${turn.targetLanguage.displayName}',
+        )
         ..writeln(turn.sourceText)
         ..writeln(turn.translatedText)
         ..writeln();
@@ -75,7 +77,9 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
         builder: (context) => Dialog(
           backgroundColor: const Color(0xFF151719),
           insetPadding: const EdgeInsets.all(36),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(28),
+          ),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 620, maxHeight: 820),
             child: AnimatedBuilder(
@@ -126,7 +130,10 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
             child: Column(
               children: [
                 _Header(onSettings: _openSettings),
-                Divider(height: 1, color: Colors.white.withValues(alpha: 0.11)),
+                Divider(
+                  height: 1,
+                  color: Colors.white.withValues(alpha: 0.11),
+                ),
                 Expanded(
                   child: _HomeStage(
                     controller: controller,
@@ -163,7 +170,12 @@ class _Header extends StatelessWidget {
     final width = MediaQuery.sizeOf(context).width;
     final compact = width < 420;
     return Padding(
-      padding: EdgeInsets.fromLTRB(compact ? 20 : 28, 20, compact ? 16 : 24, 18),
+      padding: EdgeInsets.fromLTRB(
+        compact ? 20 : 28,
+        20,
+        compact ? 16 : 24,
+        18,
+      ),
       child: Row(
         children: [
           _EburonBadge(size: compact ? 54 : 60),
@@ -274,9 +286,9 @@ class _HomeStage extends StatelessWidget {
                         ),
                       ),
                     ),
-                    if (controller.preparing) ...[
+                    if (controller.preparing || !controller.ready) ...[
                       const SizedBox(height: 26),
-                      _ProgressCard(controller: controller),
+                      _DownloadProgressGroup(controller: controller),
                     ],
                     if (controller.error != null) ...[
                       const SizedBox(height: 20),
@@ -310,10 +322,10 @@ class _HomeStage extends StatelessWidget {
 
   String get _helper {
     if (controller.preparing) {
-      return 'The on-device models download once, then translation runs locally on this device.';
+      return 'Each on-device model is tracked separately below so you can see exactly what is downloading.';
     }
     if (!controller.ready) {
-      return 'Tap play to prepare the local models and start a real-time voice session.';
+      return 'Tap play to download the three local models. Translation works fully offline afterward.';
     }
     if (controller.listeningSide != null) {
       return 'Tap the microphone again when the sentence is complete.';
@@ -375,6 +387,145 @@ class _LanguagePair extends StatelessWidget {
   }
 }
 
+class _DownloadProgressGroup extends StatelessWidget {
+  const _DownloadProgressGroup({required this.controller});
+
+  final TranslatorController controller;
+
+  @override
+  Widget build(BuildContext context) {
+    final readyCount = <double>[
+      controller.ebTranslatorProgress,
+      controller.speechRecognitionProgress,
+      controller.speechSynthesysProgress,
+    ].where((p) => p >= 0.999).length;
+
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 650),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.fromLTRB(18, 17, 18, 18),
+        decoration: BoxDecoration(
+          color: const Color(0xFF15191D),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'ON-DEVICE MODELS',
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.4,
+                    ),
+                  ),
+                ),
+                Text(
+                  '$readyCount / 3 ready',
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.56),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 17),
+            _ModelProgressRow(
+              label: 'Eb Translator',
+              progress: controller.ebTranslatorProgress,
+              status: controller.ebTranslatorStatus,
+            ),
+            const SizedBox(height: 17),
+            _ModelProgressRow(
+              label: 'Speech Recognition',
+              progress: controller.speechRecognitionProgress,
+              status: controller.speechRecognitionStatus,
+            ),
+            const SizedBox(height: 17),
+            _ModelProgressRow(
+              label: 'Speech Synthesys',
+              progress: controller.speechSynthesysProgress,
+              status: controller.speechSynthesysStatus,
+            ),
+            const SizedBox(height: 14),
+            Text(
+              controller.setupStatus,
+              style: TextStyle(
+                fontSize: 13.5,
+                color: Colors.white.withValues(alpha: 0.46),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _ModelProgressRow extends StatelessWidget {
+  const _ModelProgressRow({
+    required this.label,
+    required this.progress,
+    required this.status,
+  });
+
+  final String label;
+  final double progress;
+  final String status;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = progress.clamp(0.0, 1.0);
+    final complete = p >= 0.999 && status == 'Ready';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                label,
+                style: const TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
+            if (complete)
+              const Icon(Icons.check_circle_rounded, size: 17)
+            else
+              Text(
+                '${(p * 100).toStringAsFixed(0)}%',
+                style: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.68),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        ClipRRect(
+          borderRadius: BorderRadius.circular(999),
+          child: LinearProgressIndicator(value: p, minHeight: 5),
+        ),
+        const SizedBox(height: 6),
+        Text(
+          status,
+          style: TextStyle(
+            fontSize: 12.5,
+            color: Colors.white.withValues(alpha: 0.48),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _LiveConversation extends StatelessWidget {
   const _LiveConversation({required this.controller});
 
@@ -399,9 +550,16 @@ class _LiveConversation extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(icon, size: 18, color: Colors.white.withValues(alpha: 0.66)),
+                Icon(
+                  icon,
+                  size: 18,
+                  color: Colors.white.withValues(alpha: 0.66),
+                ),
                 const SizedBox(width: 8),
-                Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
+                Text(
+                  title,
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
               ],
             ),
             const SizedBox(height: 10),
@@ -418,8 +576,16 @@ class _LiveConversation extends StatelessWidget {
       );
     }
 
-    final first = card(controller.languageA.displayName, controller.textA, Icons.mic_none_rounded);
-    final second = card(controller.languageB.displayName, controller.textB, Icons.volume_up_outlined);
+    final first = card(
+      controller.languageA.displayName,
+      controller.textA,
+      Icons.mic_none_rounded,
+    );
+    final second = card(
+      controller.languageB.displayName,
+      controller.textB,
+      Icons.volume_up_outlined,
+    );
 
     return Column(
       children: [
@@ -557,56 +723,14 @@ class _ControlButton extends StatelessWidget {
         onPressed: enabled ? onPressed : null,
         icon: Icon(icon, size: large ? 33 : 27),
         style: IconButton.styleFrom(
-          backgroundColor: highlighted ? const Color(0xFF20272C) : const Color(0xFF1B1D20),
-          foregroundColor: Colors.white.withValues(alpha: enabled ? 0.66 : 0.25),
+          backgroundColor:
+              highlighted ? const Color(0xFF20272C) : const Color(0xFF1B1D20),
+          foregroundColor:
+              Colors.white.withValues(alpha: enabled ? 0.66 : 0.25),
           disabledBackgroundColor: const Color(0xFF1B1D20),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
-        ),
-      ),
-    );
-  }
-}
-
-class _ProgressCard extends StatelessWidget {
-  const _ProgressCard({required this.controller});
-
-  final TranslatorController controller;
-
-  @override
-  Widget build(BuildContext context) {
-    final p = controller.setupProgress.clamp(0.0, 1.0);
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
-      child: Container(
-        width: double.infinity,
-        padding: const EdgeInsets.all(17),
-        decoration: BoxDecoration(
-          color: const Color(0xFF15191D),
-          borderRadius: BorderRadius.circular(22),
-          border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
-        ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
-              children: [
-                const Expanded(
-                  child: Text(
-                    'ON-DEVICE TRANSLATOR',
-                    style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
-                  ),
-                ),
-                Text('${(p * 100).toStringAsFixed(0)}%'),
-              ],
-            ),
-            const SizedBox(height: 12),
-            LinearProgressIndicator(value: p, minHeight: 4),
-            const SizedBox(height: 11),
-            Text(
-              controller.setupStatus,
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.55)),
-            ),
-          ],
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(22),
+          ),
         ),
       ),
     );
@@ -622,12 +746,15 @@ class _ErrorCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 620),
+      constraints: const BoxConstraints(maxWidth: 650),
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.56),
+          color: Theme.of(context)
+              .colorScheme
+              .errorContainer
+              .withValues(alpha: 0.56),
           borderRadius: BorderRadius.circular(18),
         ),
         child: Row(
@@ -635,7 +762,8 @@ class _ErrorCard extends StatelessWidget {
             const Icon(Icons.error_outline_rounded),
             const SizedBox(width: 10),
             Expanded(child: Text(message)),
-            if (onRetry != null) TextButton(onPressed: onRetry, child: const Text('Retry')),
+            if (onRetry != null)
+              TextButton(onPressed: onRetry, child: const Text('Retry')),
           ],
         ),
       ),
@@ -664,87 +792,95 @@ class _SettingsPanel extends StatelessWidget {
           Row(
             children: [
               const Expanded(
-                child: Text('Settings', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
+                child: Text(
+                  'Settings',
+                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
+                ),
               ),
-              IconButton(onPressed: onClose, icon: const Icon(Icons.close_rounded, size: 28)),
+              IconButton(
+                onPressed: onClose,
+                icon: const Icon(Icons.close_rounded, size: 28),
+              ),
             ],
           ),
           const SizedBox(height: 20),
           _LanguageDropdown(
             label: 'Staff Language (Language 1)',
             value: controller.languageA,
-            onChanged: (value) => controller.setLanguage(TranslationSide.a, value),
+            enabled: !controller.busy,
+            onChanged: (value) =>
+                controller.setLanguage(TranslationSide.a, value),
           ),
           const SizedBox(height: 18),
           _LanguageDropdown(
             label: 'Guest Language (Language 2)',
             value: controller.languageB,
-            onChanged: (value) => controller.setLanguage(TranslationSide.b, value),
+            enabled: !controller.busy,
+            onChanged: (value) =>
+                controller.setLanguage(TranslationSide.b, value),
           ),
           const SizedBox(height: 18),
           Row(
             children: [
-              const Expanded(child: Text('Auto-detect Guest Language', style: TextStyle(fontSize: 16))),
+              const Expanded(
+                child: Text(
+                  'Auto-detect Guest Language',
+                  style: TextStyle(fontSize: 16),
+                ),
+              ),
               Switch.adaptive(value: false, onChanged: null),
             ],
           ),
           Text(
             'Available when multilingual Speech Recognition is integrated.',
-            style: TextStyle(fontSize: 13, color: Colors.white.withValues(alpha: 0.42)),
+            style: TextStyle(
+              fontSize: 13,
+              color: Colors.white.withValues(alpha: 0.42),
+            ),
           ),
           const SizedBox(height: 20),
-          _InfoBox(label: 'AI Voice', value: 'Speech Synthesys', icon: Icons.graphic_eq_rounded),
+          const _InfoBox(
+            label: 'AI Voice',
+            value: 'Speech Synthesys',
+            icon: Icons.graphic_eq_rounded,
+          ),
           const SizedBox(height: 18),
           _InfoBox(
             label: 'Conversation topic',
-            value: controller.medicalMode ? 'Medical Consultation' : 'General Conversation',
+            value: controller.medicalMode
+                ? 'Medical Consultation'
+                : 'General Conversation',
             icon: Icons.folder_open_outlined,
           ),
           const SizedBox(height: 18),
           SegmentedButton<bool>(
             segments: const [
-              ButtonSegment<bool>(value: true, label: Text('Medical'), icon: Icon(Icons.check_rounded)),
+              ButtonSegment<bool>(
+                value: true,
+                label: Text('Medical'),
+                icon: Icon(Icons.check_rounded),
+              ),
               ButtonSegment<bool>(value: false, label: Text('General')),
             ],
             selected: {controller.medicalMode},
             onSelectionChanged: controller.busy
                 ? null
-                : (selection) => controller.setMedicalMode(selection.first),
+                : (selection) =>
+                    controller.setMedicalMode(selection.first),
           ),
           const SizedBox(height: 28),
-          Row(
-            children: [
-              const Expanded(
-                child: Text(
-                  'ON-DEVICE TRANSLATOR',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
-                ),
-              ),
-              Text(
-                controller.preparing
-                    ? 'downloading ${(controller.setupProgress * 100).toStringAsFixed(0)}%'
-                    : controller.ready
-                        ? 'ready'
-                        : 'not installed',
-                style: TextStyle(color: Colors.white.withValues(alpha: 0.52)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 10),
-          LinearProgressIndicator(
-            value: controller.ready ? 1 : controller.setupProgress.clamp(0, 1),
-            minHeight: 4,
-          ),
-          const SizedBox(height: 10),
-          Text(
-            'Eb Translator downloads once, then translates locally on-device.',
-            style: TextStyle(height: 1.45, color: Colors.white.withValues(alpha: 0.52)),
-          ),
+          _DownloadProgressGroup(controller: controller),
           const SizedBox(height: 12),
-          OutlinedButton.icon(
-            onPressed: controller.preparing ? null : controller.prepareOfflineModels,
-            icon: const Icon(Icons.download_rounded),
-            label: Text(controller.ready ? 'Re-check models' : 'Download models'),
+          SizedBox(
+            width: double.infinity,
+            child: OutlinedButton.icon(
+              onPressed:
+                  controller.preparing ? null : controller.prepareOfflineModels,
+              icon: const Icon(Icons.download_rounded),
+              label: Text(
+                controller.ready ? 'Re-check models' : 'Download models',
+              ),
+            ),
           ),
           const SizedBox(height: 28),
           Row(
@@ -752,7 +888,11 @@ class _SettingsPanel extends StatelessWidget {
               const Expanded(
                 child: Text(
                   'TRANSLATION HISTORY',
-                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
+                  style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w800,
+                    letterSpacing: 1.4,
+                  ),
                 ),
               ),
               Text('${controller.history.length} saved'),
@@ -763,7 +903,8 @@ class _SettingsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: controller.history.isEmpty ? null : onCopyHistory,
+                  onPressed:
+                      controller.history.isEmpty ? null : onCopyHistory,
                   icon: const Icon(Icons.copy_rounded),
                   label: const Text('Copy'),
                 ),
@@ -771,7 +912,8 @@ class _SettingsPanel extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed: controller.busy ? null : controller.clearConversation,
+                  onPressed:
+                      controller.busy ? null : controller.clearConversation,
                   icon: const Icon(Icons.delete_outline_rounded),
                   label: const Text('Clear'),
                 ),
@@ -782,7 +924,9 @@ class _SettingsPanel extends StatelessWidget {
           Center(
             child: Text(
               'Powered by Eburon AI',
-              style: TextStyle(color: Colors.white.withValues(alpha: 0.38)),
+              style: TextStyle(
+                color: Colors.white.withValues(alpha: 0.38),
+              ),
             ),
           ),
         ],
@@ -795,11 +939,13 @@ class _LanguageDropdown extends StatelessWidget {
   const _LanguageDropdown({
     required this.label,
     required this.value,
+    required this.enabled,
     required this.onChanged,
   });
 
   final String label;
   final TranslationLanguage value;
+  final bool enabled;
   final ValueChanged<TranslationLanguage> onChanged;
 
   @override
@@ -809,7 +955,12 @@ class _LanguageDropdown extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 8, bottom: 7),
-          child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.45))),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.45),
+            ),
+          ),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
@@ -831,21 +982,25 @@ class _LanguageDropdown extends StatelessWidget {
                     ),
                   )
                   .toList(),
-              onChanged: controllerBusy(context) ? null : (item) {
-                if (item != null) onChanged(item);
-              },
+              onChanged: !enabled
+                  ? null
+                  : (item) {
+                      if (item != null) onChanged(item);
+                    },
             ),
           ),
         ),
       ],
     );
   }
-
-  bool controllerBusy(BuildContext context) => false;
 }
 
 class _InfoBox extends StatelessWidget {
-  const _InfoBox({required this.label, required this.value, required this.icon});
+  const _InfoBox({
+    required this.label,
+    required this.value,
+    required this.icon,
+  });
 
   final String label;
   final String value;
@@ -858,7 +1013,12 @@ class _InfoBox extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 8, bottom: 7),
-          child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.45))),
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Colors.white.withValues(alpha: 0.45),
+            ),
+          ),
         ),
         Container(
           width: double.infinity,
@@ -872,7 +1032,15 @@ class _InfoBox extends StatelessWidget {
             children: [
               Icon(icon, color: Colors.white.withValues(alpha: 0.68)),
               const SizedBox(width: 12),
-              Expanded(child: Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600))),
+              Expanded(
+                child: Text(
+                  value,
+                  style: const TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
             ],
           ),
         ),
@@ -894,10 +1062,17 @@ class _EburonBadge extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: const RadialGradient(
-          colors: [Color(0xFF282A2C), Color(0xFF111214), Color(0xFF050506)],
+          colors: [
+            Color(0xFF282A2C),
+            Color(0xFF111214),
+            Color(0xFF050506),
+          ],
           stops: [0, 0.58, 1],
         ),
-        border: Border.all(color: Colors.white.withValues(alpha: 0.88), width: 2),
+        border: Border.all(
+          color: Colors.white.withValues(alpha: 0.88),
+          width: 2,
+        ),
         boxShadow: [
           BoxShadow(
             color: Colors.black.withValues(alpha: 0.30),
