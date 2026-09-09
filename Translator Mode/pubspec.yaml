@@ -1,7 +1,7 @@
 name: matuk_translator_mode
 description: Standalone dual translator based on the Matuk local Gemma 3, Sherpa STT, and Supertonic 3 stack.
 publish_to: "none"
-version: 1.0.1+2
+version: 1.0.2+3
 
 environment:
   sdk: ">=3.10.1 <4.0.0"
