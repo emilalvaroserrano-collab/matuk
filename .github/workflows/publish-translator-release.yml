@@ -1,0 +1,51 @@
+name: Publish Translator Mode Release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/publish-translator-release.yml'
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: write
+
+jobs:
+  publish-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download verified APK artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api repos/${{ github.repository }}/actions/artifacts/10102730095/zip > translator-artifact.zip
+          unzip -q translator-artifact.zip -d translator-artifact
+          APK_PATH="$(find translator-artifact -type f -name '*.apk' | head -n 1)"
+          test -n "$APK_PATH"
+          cp "$APK_PATH" matuk-translator-mode-v0.1.0.apk
+          sha256sum matuk-translator-mode-v0.1.0.apk > matuk-translator-mode-v0.1.0.apk.sha256
+          ls -lh matuk-translator-mode-v0.1.0.apk
+          cat matuk-translator-mode-v0.1.0.apk.sha256
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="translator-mode-v0.1.0"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" \
+              matuk-translator-mode-v0.1.0.apk \
+              matuk-translator-mode-v0.1.0.apk.sha256 \
+              --clobber
+          else
+            gh release create "$TAG" \
+              matuk-translator-mode-v0.1.0.apk \
+              matuk-translator-mode-v0.1.0.apk.sha256 \
+              --target bf22a72515d4c6ffa004b2bcc9b268d86377ee0b \
+              --title "Translator Mode v0.1.0" \
+              --notes "First Android release of Matuk Translator Mode. Verified from successful GitHub Actions build run #6. Local-first dual translator using Gemma 3 1B, offline Sherpa STT, and Supertonic 3 TTS. Models are prepared on first run."
+          fi
