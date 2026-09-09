@@ -49,10 +49,12 @@ jobs:
           grep -q "installEbTranslator" "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q "installSpeechRecognition" "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q "installSpeechSynthesys" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "installingEbTranslator" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "installingSpeechRecognition" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "installingSpeechSynthesys" "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q "version: 1.1.3+8" "Translator Mode/pubspec.yaml"
+          grep -q 'whisper_cpp_flutter_plus: ^0.4.1' "Translator Mode/pubspec.yaml"
+          ! grep -q 'sherpa_asr_sdk' "Translator Mode/pubspec.yaml"
+          grep -q 'WhisperModelCatalog.base' "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q 'downloadCatalogModel' "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q 'transcribeMicrophone' "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q 'version: 1.1.4+9' "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -84,31 +86,35 @@ jobs:
             echo 'ERROR: incompatible ONNX Runtime Java JNI bridge is still packaged'
             exit 1
           fi
+          unzip -l "$APK" | grep -i 'whisper' >/dev/null || {
+            echo 'ERROR: whisper.cpp native/runtime assets were not packaged'
+            exit 1
+          }
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.3-apk
+          name: dual-translate-v0.2.4-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.3.apk
-          sha256sum dual-translate-v0.2.3.apk > dual-translate-v0.2.3.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.4.apk
+          sha256sum dual-translate-v0.2.4.apk > dual-translate-v0.2.4.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.3"
+          TAG="translator-mode-v0.2.4"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.3.apk \
-            dual-translate-v0.2.3.apk.sha256 \
+            dual-translate-v0.2.4.apk \
+            dual-translate-v0.2.4.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.3" \
-            --notes "Model installation is now fully separated. Eb Translator, Speech Recognition, and Speech Synthesys each have their own Install/Resume/Retry control and independent progress/status. Only one installer can run at a time and there is no automatic hand-off to the next model. Completed models remain detected as Ready after app restart, while microphone/play stay disabled until all three models are installed. The existing responsive UI, memory-safe runtime lifecycle, hardened Android host, and pinned SmolLM2 model are retained."
+            --title "Dual Translate v0.2.4" \
+            --notes "Speech Recognition has been replaced with realtime local whisper.cpp via whisper_cpp_flutter_plus 0.4.1. The old sherpa_asr_sdk dependency and its failing Speech Recognition installer are removed. Speech Recognition now uses the checksum-pinned multilingual Whisper Base catalog model with resumable downloads, live microphone streaming, partial transcript updates, final flush on stop, GPU-first loading with CPU fallback, and full local inference. Eb Translator and Speech Synthesys remain unchanged and independently installable."
