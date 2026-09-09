@@ -1,7 +1,5 @@
 import 'translation_language.dart';
 
-enum TranslationSide { a, b }
-
 class TranslationTurn {
   const TranslationTurn({
     required this.sourceSide,
