@@ -10,12 +10,15 @@ class OfflineSttService {
   Future<bool> modelsReady() =>
       SherpaModelsManager.instance.hasStreamingBilingualModel();
 
+  /// First-run setup only downloads model files. Native ASR initialization is
+  /// deliberately deferred until the user actually taps the microphone.
   Future<void> prepare({required void Function(double progress) onProgress}) async {
     final manager = SherpaModelsManager.instance;
     if (!await manager.hasStreamingBilingualModel()) {
       await manager.downloadStreamingBilingualModels(onProgress: onProgress);
+    } else {
+      onProgress(1);
     }
-    await initialize(onProgress: onProgress);
   }
 
   Future<void> initialize({void Function(double progress)? onProgress}) async {
@@ -43,10 +46,14 @@ class OfflineSttService {
     _subscription = null;
   }
 
-  Future<void> dispose() async {
+  /// Frees the native recognizer while keeping downloaded models on disk.
+  /// This lets Gemma or Supertonic use the memory immediately afterward.
+  Future<void> releaseRuntime() async {
     await stopListening();
     if (AsrSdk.isStarted) await AsrSdk.stop();
     if (AsrSdk.isInitialized) await AsrSdk.dispose();
     _initialized = false;
   }
+
+  Future<void> dispose() => releaseRuntime();
 }
