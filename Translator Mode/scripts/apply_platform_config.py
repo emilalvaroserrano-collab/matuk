@@ -13,6 +13,23 @@ if 'android.permission.RECORD_AUDIO' not in text:
         '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
         '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n' + permissions,
     )
+
+# Production identity and local-data defaults.
+text = re.sub(
+    r'android:label="[^"]+"',
+    'android:label="Dual Translate"',
+    text,
+    count=1,
+)
+if 'android:allowBackup=' not in text:
+    text = text.replace(
+        '<application\n',
+        '<application\n'
+        '        android:allowBackup="false"\n'
+        '        android:usesCleartextTraffic="false"\n'
+        '        android:largeHeap="true"\n',
+        1,
+    )
 manifest.write_text(text)
 
 # Current native dependencies require NDK 28.2. Use the highest requirement.
@@ -100,4 +117,4 @@ if ios_root.exists():
         )
         pbx.write_text(text)
 
-print('Applied local-inference platform configuration.')
+print('Applied production local-inference platform configuration.')
