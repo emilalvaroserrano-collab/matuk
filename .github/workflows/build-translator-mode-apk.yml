@@ -51,12 +51,14 @@ jobs:
           ! grep -q 'whisper_cpp_flutter_plus' "Translator Mode/pubspec.yaml"
           ! grep -q 'sherpa_asr_sdk' "Translator Mode/pubspec.yaml"
           grep -q 'MethodChannel' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'on_device_stt' "Translator Mode/lib/services/offline_stt_service.dart"
+          grep -q 'STT_LANGUAGE_DOWNLOAD_SCHEDULED' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'setLanguageTag' "Translator Mode/lib/services/offline_stt_service.dart"
           grep -q 'sttCode' "Translator Mode/lib/models/translation_language.dart"
           grep -q 'createOnDeviceSpeechRecognizer' "Translator Mode/scripts/apply_platform_config.py"
-          grep -q 'isOnDeviceRecognitionAvailable' "Translator Mode/scripts/apply_platform_config.py"
-          grep -q 'version: 1.1.5+10' "Translator Mode/pubspec.yaml"
+          grep -q 'checkRecognitionSupport' "Translator Mode/scripts/apply_platform_config.py"
+          grep -q 'triggerModelDownload' "Translator Mode/scripts/apply_platform_config.py"
+          grep -q 'ERROR_LANGUAGE_UNAVAILABLE' "Translator Mode/scripts/apply_platform_config.py"
+          grep -q 'version: 1.1.6+11' "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -73,6 +75,8 @@ jobs:
           grep -q 'android.permission.RECORD_AUDIO' android/app/src/main/AndroidManifest.xml
           grep -q 'android.speech.RecognitionService' android/app/src/main/AndroidManifest.xml
           grep -q 'createOnDeviceSpeechRecognizer' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
+          grep -q 'checkRecognitionSupport' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
+          grep -q 'triggerModelDownload' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
           grep -q 'EXTRA_PARTIAL_RESULTS' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
 
       - name: Build release APK
@@ -92,34 +96,34 @@ jobs:
             exit 1
           fi
           if unzip -l "$APK" | grep -qi 'whisper'; then
-            echo 'ERROR: Whisper runtime is still packaged; Android built-in STT should require no STT model/runtime download'
+            echo 'ERROR: Whisper runtime is still packaged; Android built-in STT should require no bundled STT model/runtime'
             exit 1
           fi
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.5-apk
+          name: dual-translate-v0.2.6-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.5.apk
-          sha256sum dual-translate-v0.2.5.apk > dual-translate-v0.2.5.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.6.apk
+          sha256sum dual-translate-v0.2.6.apk > dual-translate-v0.2.6.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.5"
+          TAG="translator-mode-v0.2.6"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.5.apk \
-            dual-translate-v0.2.5.apk.sha256 \
+            dual-translate-v0.2.6.apk \
+            dual-translate-v0.2.6.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.5" \
-            --notes "Speech Recognition now uses Android's strict on-device SpeechRecognizer (API 31+) through a native Flutter platform channel. There is no downloadable STT model, no Whisper/Sherpa STT runtime, and no cloud fallback. The app checks SpeechRecognizer.isOnDeviceRecognitionAvailable, uses createOnDeviceSpeechRecognizer, enables partial results, and sends the selected language locale to Android. If the device does not provide an on-device recognizer, Speech Recognition is shown as unavailable rather than using network speech. Eb Translator and Speech Synthesys remain local and independently installable."
+            --title "Dual Translate v0.2.6" \
+            --notes "Fixes Android Speech Recognition error 13 (ERROR_LANGUAGE_UNAVAILABLE). Before listening, Dual Translate now checks the strict on-device recognizer for the selected locale, uses an already-installed compatible locale when available, and on Android 14+ asks the system recognizer to download the required offline speech pack with progress callbacks. Android 13 receives the system model-download request and asks the user to retry after installation. Recognition remains createOnDeviceSpeechRecognizer only: no cloud recognition fallback and no bundled Whisper/Sherpa STT model. The Android manifest also keeps the required RecognitionService queries declaration."
