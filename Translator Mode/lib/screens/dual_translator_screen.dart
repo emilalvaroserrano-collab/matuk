@@ -31,20 +31,15 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
       );
       return;
     }
-    if (controller.generating) {
-      await controller.stopGeneration();
+    await controller.toggleMicMute(hint: _activeSide);
+  }
+
+  Future<void> _togglePlay() async {
+    if (!controller.ready) {
+      await controller.prepareOfflineModels();
       return;
     }
-    final stopping = controller.listeningSide == _activeSide;
-    await controller.toggleListening(_activeSide);
-    if (!mounted) return;
-    if (stopping && controller.listeningSide == null && controller.error == null) {
-      setState(() {
-        _activeSide = _activeSide == TranslationSide.a
-            ? TranslationSide.b
-            : TranslationSide.a;
-      });
-    }
+    await controller.toggleVoiceSession(hint: _activeSide);
   }
 
   Future<void> _replayLatest() async {
@@ -80,9 +75,7 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
         builder: (context) => Dialog(
           backgroundColor: const Color(0xFF151719),
           insetPadding: const EdgeInsets.all(36),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(28),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(28)),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 640, maxHeight: 860),
             child: AnimatedBuilder(
@@ -126,39 +119,34 @@ class _DualTranslatorScreenState extends State<DualTranslatorScreen> {
   Widget build(BuildContext context) {
     return AnimatedBuilder(
       animation: controller,
-      builder: (context, _) {
-        return Scaffold(
-          backgroundColor: const Color(0xFF1A1C1E),
-          body: SafeArea(
-            child: Column(
-              children: [
-                _Header(onSettings: _openSettings),
-                Divider(
-                  height: 1,
-                  color: Colors.white.withValues(alpha: 0.11),
-                ),
-                Expanded(
-                  child: _HomeStage(
-                    controller: controller,
-                    activeSide: _activeSide,
-                    onSideChanged: (side) {
-                      if (controller.busy) return;
-                      setState(() => _activeSide = side);
-                    },
-                  ),
-                ),
-                _BottomControls(
+      builder: (context, _) => Scaffold(
+        backgroundColor: const Color(0xFF1A1C1E),
+        body: SafeArea(
+          child: Column(
+            children: [
+              _Header(onSettings: _openSettings),
+              Divider(height: 1, color: Colors.white.withValues(alpha: 0.11)),
+              Expanded(
+                child: _HomeStage(
                   controller: controller,
-                  onMic: _toggleMic,
-                  onSpeaker: _replayLatest,
-                  onReset: controller.clearConversation,
-                  onPlay: _toggleMic,
+                  activeSide: _activeSide,
+                  onSideChanged: (side) {
+                    if (controller.voiceSessionActive || controller.busy) return;
+                    setState(() => _activeSide = side);
+                  },
                 ),
-              ],
-            ),
+              ),
+              _BottomControls(
+                controller: controller,
+                onMic: _toggleMic,
+                onSpeaker: _replayLatest,
+                onReset: controller.clearConversation,
+                onPlay: _togglePlay,
+              ),
+            ],
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 }
@@ -169,15 +157,9 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    final compact = width < 420;
+    final compact = MediaQuery.sizeOf(context).width < 420;
     return Padding(
-      padding: EdgeInsets.fromLTRB(
-        compact ? 20 : 28,
-        20,
-        compact ? 16 : 24,
-        18,
-      ),
+      padding: EdgeInsets.fromLTRB(compact ? 20 : 28, 20, compact ? 16 : 24, 18),
       child: Row(
         children: [
           _EburonBadge(size: compact ? 54 : 60),
@@ -227,6 +209,7 @@ class _HomeStage extends StatelessWidget {
     required this.activeSide,
     required this.onSideChanged,
   });
+
   final TranslatorController controller;
   final TranslationSide activeSide;
   final ValueChanged<TranslationSide> onSideChanged;
@@ -286,6 +269,17 @@ class _HomeStage extends StatelessWidget {
                         ),
                       ),
                     ),
+                    if (controller.detectedLanguageStatus.isNotEmpty &&
+                        controller.voiceSessionActive) ...[
+                      const SizedBox(height: 10),
+                      Text(
+                        controller.detectedLanguageStatus,
+                        style: TextStyle(
+                          fontSize: 13,
+                          color: Colors.white.withValues(alpha: 0.40),
+                        ),
+                      ),
+                    ],
                     if (!controller.ready || controller.preparing) ...[
                       const SizedBox(height: 26),
                       _IndependentModelInstaller(controller: controller),
@@ -310,14 +304,13 @@ class _HomeStage extends StatelessWidget {
 
   String get _title {
     if (controller.installingEbTranslator) return 'Installing Eb Translator';
-    if (controller.installingSpeechRecognition) {
-      return 'Installing Speech Recognition';
-    }
-    if (controller.installingSpeechSynthesys) {
-      return 'Installing Speech Synthesys';
-    }
-    if (controller.listeningSide != null) return 'Listening';
+    if (controller.installingSpeechRecognition) return 'Installing Speech Recognition';
+    if (controller.installingSpeechSynthesys) return 'Installing Speech Synthesys';
+    if (controller.speechSynthesysSpeaking) return 'Speaking';
     if (controller.generating) return 'Translating';
+    if (controller.voiceSessionActive && controller.micMuted) return 'Session active';
+    if (controller.listeningSide != null) return 'Listening';
+    if (controller.voiceSessionActive) return 'Live session';
     return controller.ready ? 'Ready to translate' : 'Install local models';
   }
 
@@ -328,13 +321,24 @@ class _HomeStage extends StatelessWidget {
     if (!controller.ready) {
       return 'Install the three on-device models separately below. Completed models stay installed when you close or reopen the app.';
     }
-    if (controller.listeningSide != null) {
-      return 'Tap the microphone again when the sentence is complete.';
+    if (controller.speechSynthesysSpeaking) {
+      return 'Speech Synthesys is speaking. The microphone is paused to prevent self-hearing.';
     }
     if (controller.generating) {
-      return 'Eb Translator is producing the translated response on-device.';
+      return 'Eb Translator is translating the complete sentence locally.';
     }
-    return 'Tap play or the microphone to start a real-time voice session.';
+    if (controller.voiceSessionActive && controller.micMuted) {
+      return 'Microphone muted. Tap the microphone to resume the same translation session.';
+    }
+    if (controller.listeningSide != null) {
+      return controller.autoDetectGuestLanguage
+          ? 'Listening continuously. Partial text is live; only a complete sentence is sent for translation.'
+          : 'Listening continuously. Only a complete sentence is sent for translation.';
+    }
+    if (controller.voiceSessionActive) {
+      return 'Local translation session is active.';
+    }
+    return 'Tap play to start a continuous session, or tap the microphone to start and control the mic.';
   }
 }
 
@@ -344,6 +348,7 @@ class _LanguagePair extends StatelessWidget {
     required this.activeSide,
     required this.onSideChanged,
   });
+
   final TranslatorController controller;
   final TranslationSide activeSide;
   final ValueChanged<TranslationSide> onSideChanged;
@@ -351,9 +356,11 @@ class _LanguagePair extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     Widget language(TranslationSide side, TranslationLanguage item) {
-      final active = side == activeSide;
+      final active = side == activeSide && !controller.autoDetectGuestLanguage;
       return InkWell(
-        onTap: controller.busy ? null : () => onSideChanged(side),
+        onTap: controller.voiceSessionActive || controller.busy
+            ? null
+            : () => onSideChanged(side),
         borderRadius: BorderRadius.circular(12),
         child: Padding(
           padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 4),
@@ -361,13 +368,14 @@ class _LanguagePair extends StatelessWidget {
             item.displayName,
             style: TextStyle(
               fontSize: 18,
-              fontWeight: active ? FontWeight.w600 : FontWeight.w400,
-              color: Colors.white.withValues(alpha: active ? 0.67 : 0.48),
+              fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+              color: Colors.white.withValues(alpha: active ? 0.72 : 0.52),
             ),
           ),
         ),
       );
     }
+
     return Wrap(
       alignment: WrapAlignment.center,
       crossAxisAlignment: WrapCrossAlignment.center,
@@ -424,9 +432,7 @@ class _IndependentModelInstaller extends StatelessWidget {
                 ),
                 Text(
                   '$readyCount / 3 ready',
-                  style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.56),
-                  ),
+                  style: TextStyle(color: Colors.white.withValues(alpha: 0.56)),
                 ),
               ],
             ),
@@ -445,8 +451,7 @@ class _IndependentModelInstaller extends StatelessWidget {
               progress: controller.ebTranslatorProgress,
               status: controller.ebTranslatorStatus,
               installing: controller.installingEbTranslator,
-              anotherInstalling:
-                  controller.preparing && !controller.installingEbTranslator,
+              anotherInstalling: controller.preparing && !controller.installingEbTranslator,
               onInstall: controller.installEbTranslator,
             ),
             const SizedBox(height: 18),
@@ -455,8 +460,7 @@ class _IndependentModelInstaller extends StatelessWidget {
               progress: controller.speechRecognitionProgress,
               status: controller.speechRecognitionStatus,
               installing: controller.installingSpeechRecognition,
-              anotherInstalling: controller.preparing &&
-                  !controller.installingSpeechRecognition,
+              anotherInstalling: controller.preparing && !controller.installingSpeechRecognition,
               onInstall: controller.installSpeechRecognition,
             ),
             const SizedBox(height: 18),
@@ -465,8 +469,7 @@ class _IndependentModelInstaller extends StatelessWidget {
               progress: controller.speechSynthesysProgress,
               status: controller.speechSynthesysStatus,
               installing: controller.installingSpeechSynthesys,
-              anotherInstalling:
-                  controller.preparing && !controller.installingSpeechSynthesys,
+              anotherInstalling: controller.preparing && !controller.installingSpeechSynthesys,
               onInstall: controller.installSpeechSynthesys,
             ),
             const SizedBox(height: 14),
@@ -493,6 +496,7 @@ class _InstallModelRow extends StatelessWidget {
     required this.anotherInstalling,
     required this.onInstall,
   });
+
   final String label;
   final double progress;
   final String status;
@@ -505,11 +509,7 @@ class _InstallModelRow extends StatelessWidget {
     final p = progress.clamp(0.0, 1.0);
     final ready = status == 'Ready' && p >= 0.999;
     final isError = status == 'Error';
-    final actionLabel = isError
-        ? 'Retry'
-        : p > 0
-            ? 'Resume'
-            : 'Install';
+    final actionLabel = isError ? 'Retry' : p > 0 ? 'Resume' : 'Install';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -519,13 +519,7 @@ class _InstallModelRow extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
-                    label,
-                    style: const TextStyle(
-                      fontSize: 15,
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
+                  Text(label, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700)),
                   const SizedBox(height: 3),
                   Text(
                     installing ? 'Installing…' : status,
@@ -598,16 +592,9 @@ class _LiveConversation extends StatelessWidget {
           children: [
             Row(
               children: [
-                Icon(
-                  icon,
-                  size: 18,
-                  color: Colors.white.withValues(alpha: 0.66),
-                ),
+                Icon(icon, size: 18, color: Colors.white.withValues(alpha: 0.66)),
                 const SizedBox(width: 8),
-                Text(
-                  title,
-                  style: const TextStyle(fontWeight: FontWeight.w700),
-                ),
+                Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
               ],
             ),
             const SizedBox(height: 10),
@@ -623,16 +610,9 @@ class _LiveConversation extends StatelessWidget {
         ),
       );
     }
-    final first = card(
-      controller.languageA.displayName,
-      controller.textA,
-      Icons.mic_none_rounded,
-    );
-    final second = card(
-      controller.languageB.displayName,
-      controller.textB,
-      Icons.volume_up_outlined,
-    );
+
+    final first = card(controller.languageA.displayName, controller.textA, Icons.mic_none_rounded);
+    final second = card(controller.languageB.displayName, controller.textB, Icons.volume_up_outlined);
     return Column(
       children: [
         if (wide)
@@ -666,6 +646,7 @@ class _BottomControls extends StatelessWidget {
     required this.onReset,
     required this.onPlay,
   });
+
   final TranslatorController controller;
   final VoidCallback onMic;
   final VoidCallback onSpeaker;
@@ -677,6 +658,7 @@ class _BottomControls extends StatelessWidget {
     final compact = MediaQuery.sizeOf(context).width < 420;
     final replayEnabled = controller.lastOutputSide != null;
     final sessionEnabled = controller.ready && !controller.preparing;
+    final micActive = controller.voiceSessionActive && !controller.micMuted;
     return SafeArea(
       top: false,
       child: Padding(
@@ -691,22 +673,21 @@ class _BottomControls extends StatelessWidget {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   _ControlButton(
-                    icon: controller.listeningSide != null
-                        ? Icons.stop_rounded
-                        : Icons.mic_rounded,
-                    enabled: sessionEnabled && !controller.generating,
+                    icon: micActive ? Icons.mic_rounded : Icons.mic_off_rounded,
+                    enabled: sessionEnabled && !controller.generating && !controller.speechSynthesysSpeaking,
+                    highlighted: micActive,
                     onPressed: onMic,
                   ),
                   const SizedBox(width: 8),
                   _ControlButton(
                     icon: Icons.volume_up_rounded,
-                    enabled: replayEnabled && sessionEnabled,
+                    enabled: replayEnabled && sessionEnabled && !controller.generating,
                     onPressed: onSpeaker,
                   ),
                   const SizedBox(width: 8),
                   _ControlButton(
                     icon: Icons.refresh_rounded,
-                    enabled: !controller.busy,
+                    enabled: sessionEnabled,
                     highlighted: true,
                     onPressed: onReset,
                   ),
@@ -718,10 +699,8 @@ class _BottomControls extends StatelessWidget {
               padding: const EdgeInsets.all(9),
               decoration: _shellDecoration(),
               child: _ControlButton(
-                icon: controller.generating
-                    ? Icons.stop_rounded
-                    : Icons.play_arrow_rounded,
-                enabled: sessionEnabled,
+                icon: controller.voiceSessionActive ? Icons.stop_rounded : Icons.play_arrow_rounded,
+                enabled: sessionEnabled && !controller.generating && !controller.speechSynthesysSpeaking,
                 highlighted: true,
                 large: true,
                 onPressed: onPlay,
@@ -748,6 +727,7 @@ class _ControlButton extends StatelessWidget {
     this.highlighted = false,
     this.large = false,
   });
+
   final IconData icon;
   final bool enabled;
   final VoidCallback onPressed;
@@ -764,15 +744,10 @@ class _ControlButton extends StatelessWidget {
         onPressed: enabled ? onPressed : null,
         icon: Icon(icon, size: large ? 33 : 27),
         style: IconButton.styleFrom(
-          backgroundColor: highlighted
-              ? const Color(0xFF20272C)
-              : const Color(0xFF1B1D20),
-          foregroundColor:
-              Colors.white.withValues(alpha: enabled ? 0.66 : 0.25),
+          backgroundColor: highlighted ? const Color(0xFF20272C) : const Color(0xFF1B1D20),
+          foregroundColor: Colors.white.withValues(alpha: enabled ? 0.66 : 0.25),
           disabledBackgroundColor: const Color(0xFF1B1D20),
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(22),
-          ),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
         ),
       ),
     );
@@ -791,10 +766,7 @@ class _ErrorCard extends StatelessWidget {
         width: double.infinity,
         padding: const EdgeInsets.all(16),
         decoration: BoxDecoration(
-          color: Theme.of(context)
-              .colorScheme
-              .errorContainer
-              .withValues(alpha: 0.56),
+          color: Theme.of(context).colorScheme.errorContainer.withValues(alpha: 0.56),
           borderRadius: BorderRadius.circular(18),
         ),
         child: Row(
@@ -815,12 +787,14 @@ class _SettingsPanel extends StatelessWidget {
     required this.onClose,
     required this.onCopyHistory,
   });
+
   final TranslatorController controller;
   final VoidCallback onClose;
   final VoidCallback onCopyHistory;
 
   @override
   Widget build(BuildContext context) {
+    final editable = !controller.voiceSessionActive && !controller.busy;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(24, 20, 24, 26),
       child: Column(
@@ -829,81 +803,59 @@ class _SettingsPanel extends StatelessWidget {
           Row(
             children: [
               const Expanded(
-                child: Text(
-                  'Settings',
-                  style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800),
-                ),
+                child: Text('Settings', style: TextStyle(fontSize: 26, fontWeight: FontWeight.w800)),
               ),
-              IconButton(
-                onPressed: onClose,
-                icon: const Icon(Icons.close_rounded, size: 28),
-              ),
+              IconButton(onPressed: onClose, icon: const Icon(Icons.close_rounded, size: 28)),
             ],
           ),
           const SizedBox(height: 20),
           _LanguageDropdown(
             label: 'Staff Language (Language 1)',
             value: controller.languageA,
-            enabled: !controller.busy,
-            onChanged: (value) =>
-                controller.setLanguage(TranslationSide.a, value),
+            enabled: editable,
+            onChanged: (value) => controller.setLanguage(TranslationSide.a, value),
           ),
           const SizedBox(height: 18),
           _LanguageDropdown(
             label: 'Guest Language (Language 2)',
             value: controller.languageB,
-            enabled: !controller.busy,
-            onChanged: (value) =>
-                controller.setLanguage(TranslationSide.b, value),
+            enabled: editable,
+            onChanged: (value) => controller.setLanguage(TranslationSide.b, value),
           ),
           const SizedBox(height: 18),
           Row(
             children: [
               const Expanded(
-                child: Text(
-                  'Auto-detect Guest Language',
-                  style: TextStyle(fontSize: 16),
-                ),
+                child: Text('Auto-detect Guest Language', style: TextStyle(fontSize: 16)),
               ),
-              Switch.adaptive(value: false, onChanged: null),
+              Switch.adaptive(
+                value: controller.autoDetectGuestLanguage,
+                onChanged: editable ? controller.setAutoDetectGuestLanguage : null,
+              ),
             ],
           ),
           Text(
-            'Available when multilingual Speech Recognition is integrated.',
-            style: TextStyle(
-              fontSize: 13,
-              color: Colors.white.withValues(alpha: 0.42),
-            ),
+            'Runs fully on-device. The latest detected non-Staff language becomes the Guest language automatically.',
+            style: TextStyle(fontSize: 13, height: 1.4, color: Colors.white.withValues(alpha: 0.42)),
           ),
           const SizedBox(height: 20),
-          const _InfoBox(
-            label: 'AI Voice',
-            value: 'Speech Synthesys',
-            icon: Icons.graphic_eq_rounded,
-          ),
+          const _InfoBox(label: 'AI Voice', value: 'Speech Synthesys', icon: Icons.graphic_eq_rounded),
           const SizedBox(height: 18),
           _InfoBox(
             label: 'Conversation topic',
-            value: controller.medicalMode
-                ? 'Medical Consultation'
-                : 'General Conversation',
+            value: controller.medicalMode ? 'Medical Consultation' : 'General Conversation',
             icon: Icons.folder_open_outlined,
           ),
           const SizedBox(height: 18),
           SegmentedButton<bool>(
             segments: const [
-              ButtonSegment<bool>(
-                value: true,
-                label: Text('Medical'),
-                icon: Icon(Icons.check_rounded),
-              ),
+              ButtonSegment<bool>(value: true, label: Text('Medical'), icon: Icon(Icons.check_rounded)),
               ButtonSegment<bool>(value: false, label: Text('General')),
             ],
             selected: {controller.medicalMode},
-            onSelectionChanged: controller.busy
-                ? null
-                : (selection) =>
-                    controller.setMedicalMode(selection.first),
+            onSelectionChanged: editable
+                ? (selection) => controller.setMedicalMode(selection.first)
+                : null,
           ),
           const SizedBox(height: 28),
           _IndependentModelInstaller(controller: controller),
@@ -913,11 +865,7 @@ class _SettingsPanel extends StatelessWidget {
               const Expanded(
                 child: Text(
                   'TRANSLATION HISTORY',
-                  style: TextStyle(
-                    fontSize: 13,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: 1.4,
-                  ),
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w800, letterSpacing: 1.4),
                 ),
               ),
               Text('${controller.history.length} saved'),
@@ -928,8 +876,7 @@ class _SettingsPanel extends StatelessWidget {
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed:
-                      controller.history.isEmpty ? null : onCopyHistory,
+                  onPressed: controller.history.isEmpty ? null : onCopyHistory,
                   icon: const Icon(Icons.copy_rounded),
                   label: const Text('Copy'),
                 ),
@@ -937,8 +884,7 @@ class _SettingsPanel extends StatelessWidget {
               const SizedBox(width: 12),
               Expanded(
                 child: OutlinedButton.icon(
-                  onPressed:
-                      controller.busy ? null : controller.clearConversation,
+                  onPressed: controller.clearConversation,
                   icon: const Icon(Icons.delete_outline_rounded),
                   label: const Text('Clear'),
                 ),
@@ -949,9 +895,7 @@ class _SettingsPanel extends StatelessWidget {
           Center(
             child: Text(
               'Powered by Eburon AI',
-              style: TextStyle(
-                color: Colors.white.withValues(alpha: 0.38),
-              ),
+              style: TextStyle(color: Colors.white.withValues(alpha: 0.38)),
             ),
           ),
         ],
@@ -967,6 +911,7 @@ class _LanguageDropdown extends StatelessWidget {
     required this.enabled,
     required this.onChanged,
   });
+
   final String label;
   final TranslationLanguage value;
   final bool enabled;
@@ -979,12 +924,7 @@ class _LanguageDropdown extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 8, bottom: 7),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.45),
-            ),
-          ),
+          child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.45))),
         ),
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 2),
@@ -999,12 +939,7 @@ class _LanguageDropdown extends StatelessWidget {
               isExpanded: true,
               dropdownColor: const Color(0xFF20272C),
               items: translationLanguages
-                  .map(
-                    (item) => DropdownMenuItem<TranslationLanguage>(
-                      value: item,
-                      child: Text(item.displayName),
-                    ),
-                  )
+                  .map((item) => DropdownMenuItem<TranslationLanguage>(value: item, child: Text(item.displayName)))
                   .toList(),
               onChanged: !enabled
                   ? null
@@ -1020,11 +955,7 @@ class _LanguageDropdown extends StatelessWidget {
 }
 
 class _InfoBox extends StatelessWidget {
-  const _InfoBox({
-    required this.label,
-    required this.value,
-    required this.icon,
-  });
+  const _InfoBox({required this.label, required this.value, required this.icon});
   final String label;
   final String value;
   final IconData icon;
@@ -1036,12 +967,7 @@ class _InfoBox extends StatelessWidget {
       children: [
         Padding(
           padding: const EdgeInsets.only(left: 8, bottom: 7),
-          child: Text(
-            label,
-            style: TextStyle(
-              color: Colors.white.withValues(alpha: 0.45),
-            ),
-          ),
+          child: Text(label, style: TextStyle(color: Colors.white.withValues(alpha: 0.45))),
         ),
         Container(
           width: double.infinity,
@@ -1056,13 +982,7 @@ class _InfoBox extends StatelessWidget {
               Icon(icon, color: Colors.white.withValues(alpha: 0.68)),
               const SizedBox(width: 12),
               Expanded(
-                child: Text(
-                  value,
-                  style: const TextStyle(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+                child: Text(value, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
               ),
             ],
           ),
@@ -1084,29 +1004,15 @@ class _EburonBadge extends StatelessWidget {
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         gradient: const RadialGradient(
-          colors: [
-            Color(0xFF282A2C),
-            Color(0xFF111214),
-            Color(0xFF050506),
-          ],
+          colors: [Color(0xFF282A2C), Color(0xFF111214), Color(0xFF050506)],
           stops: [0, 0.58, 1],
         ),
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.88),
-          width: 2,
-        ),
+        border: Border.all(color: Colors.white.withValues(alpha: 0.88), width: 2),
         boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.30),
-            blurRadius: 20,
-            offset: const Offset(0, 8),
-          ),
+          BoxShadow(color: Colors.black.withValues(alpha: 0.30), blurRadius: 20, offset: const Offset(0, 8)),
         ],
       ),
-      child: CustomPaint(
-        painter: _EburonMarkPainter(),
-        size: Size.square(size),
-      ),
+      child: CustomPaint(painter: _EburonMarkPainter(), size: Size.square(size)),
     );
   }
 }
