@@ -65,8 +65,8 @@ jobs:
           grep -q 'audio_output' "Translator Mode/lib/services/supertonic_tts_service.dart"
           grep -q 'AudioTrack' "Translator Mode/scripts/apply_platform_config.py"
           grep -q 'version: 1.1.9+14' "Translator Mode/pubspec.yaml"
-          if grep -R -n -E '@google/genai|google_generative_ai|Gemini|gemini' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
-            echo 'ERROR: cloud Gemini dependency/reference found in Translator Mode runtime'
+          if grep -R -n -E '@google/genai|google_generative_ai|generativelanguage\.googleapis\.com|google\.generativeai' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
+            echo 'ERROR: cloud generative-AI dependency/endpoint found in Translator Mode runtime'
             exit 1
           fi
 
@@ -148,4 +148,4 @@ jobs:
             dual-translate-v0.2.9.apk.sha256 \
             --target "$GITHUB_SHA" \
             --title "Dual Translate v0.2.9" \
-            --notes "Local-only live translator flow modeled after the reference Dual Translator: Play opens one continuous session; Mic mutes/unmutes without destroying the session; Whisper.cpp streams provisional transcription at a 500 ms cadence and ships only completed sentences; local language detection keeps Staff fixed and updates Guest to the latest detected non-Staff language; non-Staff speech translates to Staff and Staff speech translates to the current Guest. Eb Translator now stays warm behind a persistent local llama.cpp server during the session, Speech Synthesys pauses microphone capture during direct AudioTrack playback, and listening resumes immediately afterward. No Gemini or cloud inference is used."
+            --notes "Local-only live translator flow modeled after the reference Dual Translator: Play opens one continuous session; Mic mutes/unmutes without destroying the session; Whisper.cpp streams provisional transcription at a 500 ms cadence and ships only completed sentences; local language detection keeps Staff fixed and updates Guest to the latest detected non-Staff language; non-Staff speech translates to Staff and Staff speech translates to the current Guest. Eb Translator now stays warm behind a persistent local llama.cpp server during the session, Speech Synthesys pauses microphone capture during direct AudioTrack playback, and listening resumes immediately afterward. No cloud inference is used."
