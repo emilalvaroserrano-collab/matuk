@@ -1,0 +1,28 @@
+name: gemma_voice_assistant
+description: Fully local Flutter voice assistant using Ollama gemma3:1b, Sherpa-ONNX STT, and Supertonic 3 TTS.
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.9.0 <4.0.0"
+  flutter: ">=3.35.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  crypto: ^3.0.6
+  http: ^1.5.0
+  llama_cpp_flutter: ^0.8.0
+  llama_flutter_android: ^0.2.6
+  path_provider: ^2.1.5
+  permission_handler: ^12.0.1
+  sherpa_asr_sdk: ^1.0.0
+  supertonic_flutter: ^2.0.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
