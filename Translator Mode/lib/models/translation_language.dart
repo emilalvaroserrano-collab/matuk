@@ -1,3 +1,5 @@
+enum TranslationSide { a, b }
+
 class TranslationLanguage {
   const TranslationLanguage({
     required this.code,
