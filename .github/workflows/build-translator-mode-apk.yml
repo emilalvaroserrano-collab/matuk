@@ -45,8 +45,10 @@ jobs:
           grep -q '48ab3034d0dd401fbc721eb1df3217902fee7dab9078992d66431f09b7750201' "Translator Mode/lib/core/model_constants.dart"
           grep -q '<|im_start|>assistant' "Translator Mode/lib/core/translation_prompt_renderer.dart"
           grep -q "Dual Translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "size.width >= 900" "Translator Mode/lib/screens/dual_translator_screen.dart"
-          grep -q "version: 1.1.0+5" "Translator Mode/pubspec.yaml"
+          grep -q "Ready to translate" "Translator Mode/lib/screens/dual_translator_screen.dart"
+          grep -q "Real-time native voice translator" "Translator Mode/lib/screens/dual_translator_screen.dart"
+          grep -q "Tagalog (Filipino)" "Translator Mode/lib/models/translation_language.dart"
+          grep -q "version: 1.1.1+6" "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -82,27 +84,27 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.0-apk
+          name: dual-translate-v0.2.1-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.0.apk
-          sha256sum dual-translate-v0.2.0.apk > dual-translate-v0.2.0.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.1.apk
+          sha256sum dual-translate-v0.2.1.apk > dual-translate-v0.2.1.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.0"
+          TAG="translator-mode-v0.2.1"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.0.apk \
-            dual-translate-v0.2.0.apk.sha256 \
+            dual-translate-v0.2.1.apk \
+            dual-translate-v0.2.1.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.0" \
-            --notes "Production UI release candidate. Responsive Dual Translate interface for phones and tablets; tablet settings rail and mobile settings sheet; local-only no-auth UX; Staff/Guest speaker selection; Eb Translator, Speech Recognition, and Speech Synthesys aliases; Medical/General translation mode; memory-safe lazy native engine lifecycle; hardened Android manifest; SmolLM2-360M-Instruct Q8_0 model remains SHA-256 pinned. Auto-detect Guest Language remains disabled until the multilingual Speech Recognition backend is integrated."
+            --title "Dual Translate v0.2.1" \
+            --notes "Rebuilt the main UI to match the approved Dual Translate reference: exact dark idle composition, Eburon badge, Ready to translate hero, English (US) ↔ Tagalog (Filipino) default pair, centered helper copy, grouped mic/speaker/reset controls and separate play control. Responsive mobile/tablet settings presentation remains included. Local Eb Translator, Speech Recognition, Speech Synthesys, memory-safe runtime lifecycle, hardened Android manifest, and pinned SmolLM2 model are retained."
