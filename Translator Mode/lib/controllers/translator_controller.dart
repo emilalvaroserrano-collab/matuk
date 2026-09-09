@@ -48,14 +48,31 @@ class TranslatorController extends ChangeNotifier {
     try {
       setupStatus = 'Checking local models…';
       notifyListeners();
+
+      // Check the lightweight Gemma file state first. On a clean install this
+      // returns immediately, so no STT/TTS native libraries are touched during
+      // app launch. Native engines are loaded only after all model files exist.
       final artifact = await _installer.cachedArtifact();
-      final ttsReady = await _tts.modelsReady();
-      final sttReady = await _stt.modelsReady();
-      if (artifact == null || !ttsReady || !sttReady) {
+      if (artifact == null) {
         setupStatus = 'Offline models need first-run setup';
         notifyListeners();
         return;
       }
+
+      final ttsReady = await _tts.modelsReady();
+      if (!ttsReady) {
+        setupStatus = 'Offline models need first-run setup';
+        notifyListeners();
+        return;
+      }
+
+      final sttReady = await _stt.modelsReady();
+      if (!sttReady) {
+        setupStatus = 'Offline models need first-run setup';
+        notifyListeners();
+        return;
+      }
+
       await _initializeRuntimes(artifact);
     } catch (e) {
       error = e.toString();
