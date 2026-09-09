@@ -9,14 +9,13 @@ TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 flutter create \
-  --platforms=android,ios \
+  --platforms=android \
   --org ai.eburon \
   --project-name matuk_translator_mode \
   "$TMP/matuk_translator_mode"
 
-rm -rf "$ROOT/android" "$ROOT/ios"
+rm -rf "$ROOT/android"
 cp -R "$TMP/matuk_translator_mode/android" "$ROOT/android"
-cp -R "$TMP/matuk_translator_mode/ios" "$ROOT/ios"
 
 python3 "$ROOT/scripts/apply_platform_config.py" "$ROOT"
 cd "$ROOT"
@@ -25,4 +24,4 @@ dart format lib test
 flutter analyze
 flutter test
 
-echo "Translator Mode platform bootstrap + static tests complete."
+echo "Translator Mode Android bootstrap + static tests complete."
