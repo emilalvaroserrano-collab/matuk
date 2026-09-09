@@ -26,6 +26,8 @@ class TranslatorController extends ChangeNotifier {
   final OfflineSttService _stt;
   final SupertonicTtsService _tts;
 
+  ModelArtifact? _artifact;
+
   TranslationLanguage languageA = translationLanguages[0];
   TranslationLanguage languageB = translationLanguages[1];
   TranslationSide? listeningSide;
@@ -49,31 +51,20 @@ class TranslatorController extends ChangeNotifier {
       setupStatus = 'Checking local models…';
       notifyListeners();
 
-      // Check the lightweight Gemma file state first. On a clean install this
-      // returns immediately, so no STT/TTS native libraries are touched during
-      // app launch. Native engines are loaded only after all model files exist.
       final artifact = await _installer.cachedArtifact();
-      if (artifact == null) {
+      if (artifact == null ||
+          !await _tts.modelsReady() ||
+          !await _stt.modelsReady()) {
         setupStatus = 'Offline models need first-run setup';
         notifyListeners();
         return;
       }
 
-      final ttsReady = await _tts.modelsReady();
-      if (!ttsReady) {
-        setupStatus = 'Offline models need first-run setup';
-        notifyListeners();
-        return;
-      }
-
-      final sttReady = await _stt.modelsReady();
-      if (!sttReady) {
-        setupStatus = 'Offline models need first-run setup';
-        notifyListeners();
-        return;
-      }
-
-      await _initializeRuntimes(artifact);
+      _artifact = artifact;
+      ready = true;
+      setupProgress = 1;
+      setupStatus = 'Offline models ready';
+      notifyListeners();
     } catch (e) {
       error = e.toString();
       notifyListeners();
@@ -94,8 +85,9 @@ class TranslatorController extends ChangeNotifier {
         setupProgress = progress * 0.62;
         notifyListeners();
       });
+      _artifact = artifact;
 
-      setupStatus = 'Preparing Supertonic 3';
+      setupStatus = 'Downloading Supertonic 3';
       await _tts.prepare(onProgress: (done, total, file, fileProgress) {
         final aggregate = total == 0 ? 0.0 : (done + fileProgress) / total;
         setupProgress = 0.62 + aggregate.clamp(0, 1) * 0.32;
@@ -103,19 +95,18 @@ class TranslatorController extends ChangeNotifier {
         notifyListeners();
       });
 
-      setupStatus = 'Preparing offline speech recognition';
+      setupStatus = 'Downloading offline speech recognition';
       await _stt.prepare(onProgress: (progress) {
-        setupProgress = 0.94 + progress.clamp(0, 1) * 0.05;
+        setupProgress = 0.94 + progress.clamp(0, 1) * 0.06;
+        setupStatus = 'Offline speech recognition';
         notifyListeners();
       });
 
-      setupStatus = 'Loading local translator';
-      setupProgress = 0.99;
-      notifyListeners();
-      await _translator.load(artifact);
+      // Do not initialize any native engine here. The setup phase is strictly
+      // download-only to avoid loading STT + TTS + Gemma at the same time.
       ready = true;
       setupProgress = 1;
-      setupStatus = '100% local dual translator ready';
+      setupStatus = 'Offline models ready';
     } catch (e) {
       error = e.toString();
     } finally {
@@ -124,16 +115,13 @@ class TranslatorController extends ChangeNotifier {
     }
   }
 
-  Future<void> _initializeRuntimes(ModelArtifact artifact) async {
-    setupStatus = 'Loading local runtimes…';
-    notifyListeners();
-    await _stt.initialize();
-    await _tts.initialize();
-    await _translator.load(artifact);
-    ready = true;
-    setupProgress = 1;
-    setupStatus = '100% local dual translator ready';
-    notifyListeners();
+  Future<ModelArtifact> _requireArtifact() async {
+    final cached = _artifact ?? await _installer.cachedArtifact();
+    if (cached == null) {
+      throw StateError('Gemma model is not installed.');
+    }
+    _artifact = cached;
+    return cached;
   }
 
   void setLanguage(TranslationSide side, TranslationLanguage language) {
@@ -181,9 +169,13 @@ class TranslatorController extends ChangeNotifier {
         await stopListening(submitTranscript: false);
       }
 
-      await _tts.stop();
+      // Memory-safe mode: release Gemma/TTS before bringing up Sherpa ASR.
+      await _translator.dispose();
+      await _tts.releaseRuntime();
+
       liveTranscript = '';
       listeningSide = side;
+      setupStatus = 'Loading speech recognizer…';
       notifyListeners();
 
       await _stt.startListening((text) {
@@ -195,9 +187,12 @@ class TranslatorController extends ChangeNotifier {
         }
         notifyListeners();
       });
+      setupStatus = 'Listening';
+      notifyListeners();
     } catch (e) {
       listeningSide = null;
       error = e.toString();
+      setupStatus = 'Offline models ready';
       notifyListeners();
     }
   }
@@ -205,11 +200,17 @@ class TranslatorController extends ChangeNotifier {
   Future<void> stopListening({bool submitTranscript = false}) async {
     final side = listeningSide;
     if (side == null) return;
+
     await _stt.stopListening();
     listeningSide = null;
     final text = liveTranscript.trim();
     liveTranscript = '';
+
+    // Fully release ASR before loading Gemma for translation.
+    await _stt.releaseRuntime();
+    setupStatus = 'Offline models ready';
     notifyListeners();
+
     if (submitTranscript && text.isNotEmpty) {
       await translate(side, text);
     }
@@ -221,8 +222,9 @@ class TranslatorController extends ChangeNotifier {
     if (listeningSide != null) {
       await stopListening(submitTranscript: false);
     }
-    await _tts.stop();
+
     error = null;
+    generating = true;
 
     final source =
         sourceSide == TranslationSide.a ? languageA : languageB;
@@ -237,11 +239,22 @@ class TranslatorController extends ChangeNotifier {
       textA = '';
     }
 
-    generating = true;
+    setupStatus = 'Loading Gemma 3…';
     notifyListeners();
 
     var answer = '';
     try {
+      // Ensure only Gemma is resident while translating.
+      await _stt.releaseRuntime();
+      await _tts.releaseRuntime();
+      final artifact = await _requireArtifact();
+      if (!_translator.isLoaded) {
+        await _translator.load(artifact);
+      }
+
+      setupStatus = 'Translating';
+      notifyListeners();
+
       await for (final token in _translator.translate(
         source: source,
         target: target,
@@ -275,10 +288,18 @@ class TranslatorController extends ChangeNotifier {
       notifyListeners();
 
       if (autoSpeak && answer.isNotEmpty) {
+        setupStatus = 'Preparing speech…';
+        notifyListeners();
+
+        // Free Gemma before initializing Supertonic. This costs a reload on the
+        // next turn but keeps peak RAM much lower on mobile devices.
+        await _translator.dispose();
         await _tts.speak(answer, language: target.ttsCode);
       }
+      setupStatus = 'Offline models ready';
     } catch (e) {
       error = e.toString();
+      setupStatus = 'Offline models ready';
     } finally {
       generating = false;
       notifyListeners();
@@ -289,12 +310,22 @@ class TranslatorController extends ChangeNotifier {
     final text = side == TranslationSide.a ? textA : textB;
     final language = side == TranslationSide.a ? languageA : languageB;
     if (text.trim().isEmpty) return;
-    await _tts.speak(text, language: language.ttsCode);
+
+    try {
+      await _stt.releaseRuntime();
+      await _translator.dispose();
+      await _tts.speak(text, language: language.ttsCode);
+    } catch (e) {
+      error = e.toString();
+      notifyListeners();
+    }
   }
 
   Future<void> stopGeneration() async {
     await _translator.stop();
+    await _translator.dispose();
     generating = false;
+    setupStatus = 'Offline models ready';
     notifyListeners();
   }
 
