@@ -33,10 +33,13 @@ class TranslatorController extends ChangeNotifier {
   TranslationSide? listeningSide;
 
   bool ready = false;
-  bool preparing = false;
   bool generating = false;
   bool autoSpeak = true;
   bool medicalMode = true;
+
+  bool installingEbTranslator = false;
+  bool installingSpeechRecognition = false;
+  bool installingSpeechSynthesys = false;
 
   double setupProgress = 0;
   double ebTranslatorProgress = 0;
@@ -56,6 +59,19 @@ class TranslatorController extends ChangeNotifier {
   final List<TranslationTurn> _history = [];
   List<TranslationTurn> get history => List.unmodifiable(_history);
 
+  bool get preparing =>
+      installingEbTranslator ||
+      installingSpeechRecognition ||
+      installingSpeechSynthesys;
+
+  bool get allModelsReady =>
+      ebTranslatorProgress >= 0.999 &&
+      speechRecognitionProgress >= 0.999 &&
+      speechSynthesysProgress >= 0.999 &&
+      ebTranslatorStatus == 'Ready' &&
+      speechRecognitionStatus == 'Ready' &&
+      speechSynthesysStatus == 'Ready';
+
   bool get busy => preparing || generating || listeningSide != null;
 
   TranslationSide? get lastOutputSide {
@@ -73,6 +89,25 @@ class TranslatorController extends ChangeNotifier {
         .clamp(0.0, 1.0);
   }
 
+  void _syncReadyState() {
+    _recalculateSetupProgress();
+    ready = allModelsReady;
+    if (ready) {
+      setupProgress = 1;
+      setupStatus = 'Offline models ready';
+    } else if (!preparing) {
+      final missing = <String>[];
+      if (ebTranslatorStatus != 'Ready') missing.add('Eb Translator');
+      if (speechRecognitionStatus != 'Ready') {
+        missing.add('Speech Recognition');
+      }
+      if (speechSynthesysStatus != 'Ready') missing.add('Speech Synthesys');
+      setupStatus = missing.isEmpty
+          ? 'Checking local models…'
+          : 'Install separately: ${missing.join(', ')}';
+    }
+  }
+
   Future<void> initialize() async {
     try {
       setupStatus = 'Checking local models…';
@@ -82,25 +117,15 @@ class TranslatorController extends ChangeNotifier {
       final ttsReady = await _tts.modelsReady();
       final sttReady = await _stt.modelsReady();
 
+      _artifact = artifact;
       ebTranslatorProgress = artifact == null ? 0 : 1;
       ebTranslatorStatus = artifact == null ? 'Not installed' : 'Ready';
       speechSynthesysProgress = ttsReady ? 1 : 0;
       speechSynthesysStatus = ttsReady ? 'Ready' : 'Not installed';
       speechRecognitionProgress = sttReady ? 1 : 0;
       speechRecognitionStatus = sttReady ? 'Ready' : 'Not installed';
-      _recalculateSetupProgress();
-
-      if (artifact == null || !ttsReady || !sttReady) {
-        ready = false;
-        setupStatus = 'Offline models need first-run setup';
-        notifyListeners();
-        return;
-      }
-
-      _artifact = artifact;
-      ready = true;
-      setupProgress = 1;
-      setupStatus = 'Offline models ready';
+      error = null;
+      _syncReadyState();
       notifyListeners();
     } catch (e) {
       error = e.toString();
@@ -111,17 +136,39 @@ class TranslatorController extends ChangeNotifier {
 
   Future<void> prepareOfflineModels() async {
     if (preparing) return;
-    preparing = true;
+    if (ebTranslatorStatus != 'Ready') {
+      await installEbTranslator();
+      return;
+    }
+    if (speechRecognitionStatus != 'Ready') {
+      await installSpeechRecognition();
+      return;
+    }
+    if (speechSynthesysStatus != 'Ready') {
+      await installSpeechSynthesys();
+      return;
+    }
+    _syncReadyState();
+    notifyListeners();
+  }
+
+  Future<void> installEbTranslator() async {
+    if (preparing || generating || listeningSide != null) return;
+    installingEbTranslator = true;
     ready = false;
     error = null;
-    setupStatus = 'Preparing model downloads';
+    ebTranslatorStatus = ebTranslatorProgress >= 0.999
+        ? 'Verifying'
+        : 'Downloading';
+    setupStatus = 'Installing Eb Translator only';
     notifyListeners();
 
-    var stage = 'Eb Translator';
     try {
-      stage = 'Eb Translator';
-      ebTranslatorStatus = ebTranslatorProgress >= 1 ? 'Verifying' : 'Downloading';
-      notifyListeners();
+      await _stt.releaseRuntime();
+      await _tts.releaseRuntime();
+      await _translator.dispose();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
       final artifact = await _installer.install(onProgress: (progress, detail) {
         ebTranslatorProgress = progress.clamp(0.0, 1.0);
         ebTranslatorStatus = ebTranslatorProgress >= 0.999
@@ -134,14 +181,73 @@ class TranslatorController extends ChangeNotifier {
       _artifact = artifact;
       ebTranslatorProgress = 1;
       ebTranslatorStatus = 'Ready';
-      _recalculateSetupProgress();
+    } catch (e) {
+      error = 'Eb Translator installation failed: $e';
+      ebTranslatorStatus = 'Error';
+      setupStatus = 'Eb Translator interrupted — retry this model only';
+    } finally {
+      installingEbTranslator = false;
+      _syncReadyState();
       notifyListeners();
+    }
+  }
 
-      stage = 'Speech Synthesys';
-      speechSynthesysStatus =
-          speechSynthesysProgress >= 1 ? 'Verifying' : 'Downloading';
-      setupStatus = 'Downloading Speech Synthesys';
+  Future<void> installSpeechRecognition() async {
+    if (preparing || generating || listeningSide != null) return;
+    installingSpeechRecognition = true;
+    ready = false;
+    error = null;
+    speechRecognitionStatus = speechRecognitionProgress >= 0.999
+        ? 'Verifying'
+        : 'Downloading';
+    setupStatus = 'Installing Speech Recognition only';
+    notifyListeners();
+
+    try {
+      await _tts.releaseRuntime();
+      await _translator.dispose();
+      await _stt.releaseRuntime();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
+      await _stt.prepare(onProgress: (progress) {
+        speechRecognitionProgress = progress.clamp(0.0, 1.0);
+        speechRecognitionStatus = speechRecognitionProgress >= 0.999
+            ? 'Verifying'
+            : 'Downloading';
+        setupStatus = 'Speech Recognition';
+        _recalculateSetupProgress();
+        notifyListeners();
+      });
+      speechRecognitionProgress = 1;
+      speechRecognitionStatus = 'Ready';
+    } catch (e) {
+      error = 'Speech Recognition installation failed: $e';
+      speechRecognitionStatus = 'Error';
+      setupStatus = 'Speech Recognition interrupted — retry this model only';
+    } finally {
+      installingSpeechRecognition = false;
+      _syncReadyState();
       notifyListeners();
+    }
+  }
+
+  Future<void> installSpeechSynthesys() async {
+    if (preparing || generating || listeningSide != null) return;
+    installingSpeechSynthesys = true;
+    ready = false;
+    error = null;
+    speechSynthesysStatus = speechSynthesysProgress >= 0.999
+        ? 'Verifying'
+        : 'Downloading';
+    setupStatus = 'Installing Speech Synthesys only';
+    notifyListeners();
+
+    try {
+      await _stt.releaseRuntime();
+      await _translator.dispose();
+      await _tts.releaseRuntime();
+      await Future<void>.delayed(const Duration(milliseconds: 120));
+
       await _tts.prepare(onProgress: (done, total, file, fileProgress) {
         final aggregate = total == 0 ? 0.0 : (done + fileProgress) / total;
         speechSynthesysProgress = aggregate.clamp(0.0, 1.0);
@@ -154,44 +260,13 @@ class TranslatorController extends ChangeNotifier {
       });
       speechSynthesysProgress = 1;
       speechSynthesysStatus = 'Ready';
-      _recalculateSetupProgress();
-      notifyListeners();
-
-      stage = 'Speech Recognition';
-      speechRecognitionStatus =
-          speechRecognitionProgress >= 1 ? 'Verifying' : 'Downloading';
-      setupStatus = 'Downloading Speech Recognition';
-      notifyListeners();
-      await _stt.prepare(onProgress: (progress) {
-        speechRecognitionProgress = progress.clamp(0.0, 1.0);
-        speechRecognitionStatus = speechRecognitionProgress >= 0.999
-            ? 'Verifying'
-            : 'Downloading';
-        setupStatus = 'Speech Recognition';
-        _recalculateSetupProgress();
-        notifyListeners();
-      });
-      speechRecognitionProgress = 1;
-      speechRecognitionStatus = 'Ready';
-      _recalculateSetupProgress();
-
-      // Download-only setup avoids a native-memory spike during first launch.
-      ready = true;
-      setupProgress = 1;
-      setupStatus = 'Offline models ready';
     } catch (e) {
-      error = e.toString();
-      if (stage == 'Eb Translator') {
-        ebTranslatorStatus = 'Error';
-      } else if (stage == 'Speech Synthesys') {
-        speechSynthesysStatus = 'Error';
-      } else {
-        speechRecognitionStatus = 'Error';
-      }
-      _recalculateSetupProgress();
-      setupStatus = '$stage download interrupted — tap retry';
+      error = 'Speech Synthesys installation failed: $e';
+      speechSynthesysStatus = 'Error';
+      setupStatus = 'Speech Synthesys interrupted — retry this model only';
     } finally {
-      preparing = false;
+      installingSpeechSynthesys = false;
+      _syncReadyState();
       notifyListeners();
     }
   }
@@ -256,7 +331,6 @@ class TranslatorController extends ChangeNotifier {
         await stopListening(submitTranscript: false);
       }
 
-      // Keep only one heavy native engine resident at a time.
       await _translator.dispose();
       await _tts.releaseRuntime();
 
