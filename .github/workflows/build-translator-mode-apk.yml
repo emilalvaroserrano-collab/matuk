@@ -58,7 +58,10 @@ jobs:
           grep -q 'Listening · sentence streaming' "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q 'LibLlamaCpp' "Translator Mode/lib/services/local_translator_service.dart"
           grep -q 'LlamaGenerateCommand' "Translator Mode/lib/services/local_translator_service.dart"
-          grep -q 'version: 1.1.7+12' "Translator Mode/pubspec.yaml"
+          grep -q 'playPcm16' "Translator Mode/lib/services/supertonic_tts_service.dart"
+          grep -q 'audio_output' "Translator Mode/lib/services/supertonic_tts_service.dart"
+          grep -q 'AudioTrack' "Translator Mode/scripts/apply_platform_config.py"
+          grep -q 'version: 1.1.8+13' "Translator Mode/pubspec.yaml"
 
       - name: Bootstrap Translator Mode
         working-directory: Translator Mode
@@ -73,6 +76,9 @@ jobs:
           grep -q 'android:allowBackup="false"' android/app/src/main/AndroidManifest.xml
           grep -q 'android:usesCleartextTraffic="false"' android/app/src/main/AndroidManifest.xml
           grep -q 'android.permission.RECORD_AUDIO' android/app/src/main/AndroidManifest.xml
+          grep -q 'AudioTrack' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
+          grep -q 'playPcm16' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
+          grep -q 'ai.eburon.dual_translate/audio_output' android/app/src/main/kotlin/ai/eburon/matuk_translator_mode/MainActivity.kt
           if grep -q 'android.speech.RecognitionService' android/app/src/main/AndroidManifest.xml; then
             echo 'ERROR: Android SpeechRecognizer bridge/query is still present'
             exit 1
@@ -111,27 +117,27 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.7-apk
+          name: dual-translate-v0.2.8-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.7.apk
-          sha256sum dual-translate-v0.2.7.apk > dual-translate-v0.2.7.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.8.apk
+          sha256sum dual-translate-v0.2.8.apk > dual-translate-v0.2.8.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.7"
+          TAG="translator-mode-v0.2.8"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.7.apk \
-            dual-translate-v0.2.7.apk.sha256 \
+            dual-translate-v0.2.8.apk \
+            dual-translate-v0.2.8.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.7" \
-            --notes "Speech Recognition uses realtime whisper.cpp streaming with the multilingual Whisper Base model. Provisional transcription updates continuously, while Eb Translator receives complete sentence payloads only after punctuation-aware or natural-silence endpointing. The mic and Whisper runtime are stopped before translation and Speech Synthesys playback, then the voice session resumes, preventing TTS self-hearing. Eb Translator now uses the isolated lib_llama_cpp Android runtime, eliminating the libggml-base.so collision between the previous Android llama wrapper and Whisper. Android SpeechRecognizer is removed."
+            --title "Dual Translate v0.2.8" \
+            --notes "Fixes Speech Synthesys Android MEDIA_ERROR_SYSTEM / Failed to set source. Supertonic audio is no longer written to a temporary WAV and opened through Android MediaPlayer. On Android, generated samples are converted to PCM16 and played directly through a native AudioTrack channel. Whisper.cpp realtime sentence streaming and Eb Translator remain unchanged."
