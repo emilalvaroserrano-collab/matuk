@@ -152,7 +152,7 @@ class SupertonicTtsService {
       config: sherpa_onnx.OfflineTtsGenerationConfig(
         sid: 6,
         speed: 1.03,
-        extra: <String, dynamic>{
+        extra: <String, Object>{
           'lang': language,
           'num_steps': 5,
         },
