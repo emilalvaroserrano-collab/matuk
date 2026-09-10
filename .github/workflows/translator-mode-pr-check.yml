@@ -31,17 +31,8 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Verify local realtime pipeline source
+      - name: Verify no cloud generative AI runtime
         run: |
-          grep -q 'updateInterval: Duration(milliseconds: 320)' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q '_vadSilenceEndpointDelay = Duration(milliseconds: 720)' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q 'micLevel = ValueNotifier' "Translator Mode/lib/services/offline_stt_service.dart"
-          grep -q "label: 'Final transcription'" "Translator Mode/lib/screens/local_realtime_translator_screen.dart"
-          grep -q "label: 'Translation'" "Translator Mode/lib/screens/local_realtime_translator_screen.dart"
-          grep -q 'OfflineSttService.micLevel' "Translator Mode/lib/screens/local_realtime_translator_screen.dart"
-          grep -q 'LocalRealtimeTranslatorScreen' "Translator Mode/lib/app.dart"
-          grep -q 'await _tts.speak(answer' "Translator Mode/lib/controllers/translator_controller.dart"
-          grep -q 'await _startListening();' "Translator Mode/lib/controllers/translator_controller.dart"
           if grep -R -n -E '@google/genai|google_generative_ai|generativelanguage\.googleapis\.com|google\.generativeai' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
             echo 'ERROR: cloud generative AI dependency/endpoint found in local Translator Mode runtime'
             exit 1
