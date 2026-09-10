@@ -22,30 +22,30 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh api repos/${{ github.repository }}/actions/artifacts/10102730095/zip > translator-artifact.zip
+          gh api repos/${{ github.repository }}/actions/artifacts/10133504453/zip > translator-artifact.zip
           unzip -q translator-artifact.zip -d translator-artifact
           APK_PATH="$(find translator-artifact -type f -name '*.apk' | head -n 1)"
           test -n "$APK_PATH"
-          cp "$APK_PATH" matuk-translator-mode-v0.1.0.apk
-          sha256sum matuk-translator-mode-v0.1.0.apk > matuk-translator-mode-v0.1.0.apk.sha256
-          ls -lh matuk-translator-mode-v0.1.0.apk
-          cat matuk-translator-mode-v0.1.0.apk.sha256
+          cp "$APK_PATH" matuk-translator-mode-v0.2.10.apk
+          sha256sum matuk-translator-mode-v0.2.10.apk > matuk-translator-mode-v0.2.10.apk.sha256
+          ls -lh matuk-translator-mode-v0.2.10.apk
+          cat matuk-translator-mode-v0.2.10.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.1.0"
+          TAG="translator-mode-v0.2.10"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" \
-              matuk-translator-mode-v0.1.0.apk \
-              matuk-translator-mode-v0.1.0.apk.sha256 \
+              matuk-translator-mode-v0.2.10.apk \
+              matuk-translator-mode-v0.2.10.apk.sha256 \
               --clobber
           else
             gh release create "$TAG" \
-              matuk-translator-mode-v0.1.0.apk \
-              matuk-translator-mode-v0.1.0.apk.sha256 \
+              matuk-translator-mode-v0.2.10.apk \
+              matuk-translator-mode-v0.2.10.apk.sha256 \
               --target "$GITHUB_SHA" \
-              --title "Translator Mode v0.1.0" \
-              --notes "First Android release of Matuk Translator Mode. APK verified from successful GitHub Actions build run #6 at commit bf22a72515d4c6ffa004b2bcc9b268d86377ee0b. Local-first dual translator using Gemma 3 1B, offline Sherpa STT, and Supertonic 3 TTS. Models are prepared on first run."
+              --title "Translator Mode v0.2.10" \
+              --notes "Branded MATUK Android release with the repository logo applied as the launcher/adaptive icon. Includes the validated local realtime translator flow: voice input, VAD-assisted sentence endpointing, final STT transcription, separate Translation output, local LLM translation, and automatic local TTS read-aloud. APK built and validated by GitHub Actions before publishing."
           fi
