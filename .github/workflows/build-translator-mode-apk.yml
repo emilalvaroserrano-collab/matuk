@@ -54,6 +54,8 @@ jobs:
           grep -q 'automatic language routing' "Translator Mode/lib/controllers/translator_controller.dart"
           grep -q 'lib_llama_cpp: ^0.7.3' "Translator Mode/pubspec.yaml"
           grep -q 'LlamaHttpServer.open' "Translator Mode/lib/services/local_translator_service.dart"
+          grep -q 'libraryPath: Platform.isAndroid' "Translator Mode/lib/services/local_translator_service.dart"
+          grep -q 'liblib_llama_cpp_android.so' "Translator Mode/lib/services/local_translator_service.dart"
           grep -q 'streamChatCompletion' "Translator Mode/lib/services/local_translator_service.dart"
           grep -q 'whisper_cpp_flutter_plus: ^0.4.1' "Translator Mode/pubspec.yaml"
           grep -q 'WhisperModelCatalog.base' "Translator Mode/lib/services/offline_stt_service.dart"
@@ -64,7 +66,7 @@ jobs:
           grep -q 'playPcm16' "Translator Mode/lib/services/supertonic_tts_service.dart"
           grep -q 'audio_output' "Translator Mode/lib/services/supertonic_tts_service.dart"
           grep -q 'AudioTrack' "Translator Mode/scripts/apply_platform_config.py"
-          grep -q 'version: 1.1.9+14' "Translator Mode/pubspec.yaml"
+          grep -q 'version: 1.1.10+15' "Translator Mode/pubspec.yaml"
           if grep -R -n -E '@google/genai|google_generative_ai|generativelanguage\.googleapis\.com|google\.generativeai' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
             echo 'ERROR: cloud generative-AI dependency/endpoint found in Translator Mode runtime'
             exit 1
@@ -125,27 +127,27 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dual-translate-v0.2.9-apk
+          name: dual-translate-v0.2.10-apk
           path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 30
 
       - name: Prepare release asset
         run: |
-          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.9.apk
-          sha256sum dual-translate-v0.2.9.apk > dual-translate-v0.2.9.apk.sha256
+          cp "Translator Mode/build/app/outputs/flutter-apk/app-release.apk" dual-translate-v0.2.10.apk
+          sha256sum dual-translate-v0.2.10.apk > dual-translate-v0.2.10.apk.sha256
 
       - name: Publish GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="translator-mode-v0.2.9"
+          TAG="translator-mode-v0.2.10"
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release delete "$TAG" --yes --cleanup-tag
           fi
           gh release create "$TAG" \
-            dual-translate-v0.2.9.apk \
-            dual-translate-v0.2.9.apk.sha256 \
+            dual-translate-v0.2.10.apk \
+            dual-translate-v0.2.10.apk.sha256 \
             --target "$GITHUB_SHA" \
-            --title "Dual Translate v0.2.9" \
-            --notes "Local-only live translator flow modeled after the reference Dual Translator: Play opens one continuous session; Mic mutes/unmutes without destroying the session; Whisper.cpp streams provisional transcription at a 500 ms cadence and ships only completed sentences; local language detection keeps Staff fixed and updates Guest to the latest detected non-Staff language; non-Staff speech translates to Staff and Staff speech translates to the current Guest. Eb Translator now stays warm behind a persistent local llama.cpp server during the session, Speech Synthesys pauses microphone capture during direct AudioTrack playback, and listening resumes immediately afterward. No cloud inference is used."
+            --title "Dual Translate v0.2.10" \
+            --notes "Fixes Android Eb Translator startup failure: lib_llama_cpp_server defaults to libllama.so, while the Flutter Android plugin packages the isolated llama runtime as liblib_llama_cpp_android.so. The persistent local translator now explicitly opens the packaged Android library. Whisper.cpp sentence streaming, local language routing, warm-session translation flow, direct AudioTrack Speech Synthesys, and no-cloud inference remain unchanged."
