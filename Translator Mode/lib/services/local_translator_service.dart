@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:lib_llama_cpp/lib_llama_cpp.dart';
 
@@ -15,6 +16,13 @@ import '../models/translation_language.dart';
 /// latency while preserving token streaming.
 class LocalTranslatorService {
   static const _modelId = 'eb-translator';
+
+  // lib_llama_cpp_server's generic FFI loader defaults to `libllama.so` on
+  // Android. The Flutter Android plugin deliberately packages its isolated
+  // runtime as `liblib_llama_cpp_android.so`, so server mode must point at the
+  // bundled plugin library explicitly. This also keeps it isolated from the
+  // ggml/whisper native libraries packaged by Speech Recognition.
+  static const _androidLibraryName = 'liblib_llama_cpp_android.so';
 
   final _renderer = const TranslationPromptRenderer();
   ModelArtifact? _artifact;
@@ -46,6 +54,7 @@ class LocalTranslatorService {
           modelPath: artifact.path,
           port: 0,
         ),
+        libraryPath: Platform.isAndroid ? _androidLibraryName : null,
       );
       final address = await server.start();
       _server = server;
