@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:whisper_cpp_flutter_plus/whisper_cpp_flutter_plus.dart';
 
 import '../core/sentence_endpoint_detector.dart';
@@ -14,6 +15,11 @@ class OfflineSttService {
   );
   static const Duration _punctuatedEndpointDelay = Duration(milliseconds: 260);
   static const Duration _vadSilenceEndpointDelay = Duration(milliseconds: 720);
+
+  /// Shared UI-facing microphone activity. This stays local to the process and
+  /// contains no audio samples; it is only a normalized 0..1 activity level.
+  static final ValueNotifier<double> micLevel = ValueNotifier<double>(0.0);
+  static final ValueNotifier<bool> speechDetected = ValueNotifier<bool>(false);
 
   final WhisperModelManager _models = WhisperModelManager();
   WhisperEngine? _engine;
@@ -51,7 +57,10 @@ class OfflineSttService {
 
   Future<void> prepare({required void Function(double progress) onProgress}) async {
     final cached = await _verifiedModel();
-    if (cached != null) { onProgress(1); return; }
+    if (cached != null) {
+      onProgress(1);
+      return;
+    }
     onProgress(0.01);
     await for (final progress in _models.downloadCatalogModel(_model)) {
       onProgress((progress.fraction ?? 0.0).clamp(0.0, 1.0));
@@ -64,7 +73,9 @@ class OfflineSttService {
 
   Future<void> initialize({void Function(double progress)? onProgress}) async {
     onProgress?.call(0.1);
-    if (!await modelsReady()) throw StateError('Speech Recognition model is not installed.');
+    if (!await modelsReady()) {
+      throw StateError('Speech Recognition model is not installed.');
+    }
     onProgress?.call(1);
   }
 
@@ -73,13 +84,19 @@ class OfflineSttService {
   Future<void> _ensureEngineLoaded() async {
     if (_engine != null) return;
     final modelFile = await _verifiedModel();
-    if (modelFile == null) throw StateError('Speech Recognition model is not installed.');
+    if (modelFile == null) {
+      throw StateError('Speech Recognition model is not installed.');
+    }
     try {
-      _engine = await WhisperEngine.load(modelFile.path,
-          config: const WhisperConfig(useGpu: true, useFlashAttention: true));
+      _engine = await WhisperEngine.load(
+        modelFile.path,
+        config: const WhisperConfig(useGpu: true, useFlashAttention: true),
+      );
     } catch (_) {
-      _engine = await WhisperEngine.load(modelFile.path,
-          config: const WhisperConfig(useGpu: false, useFlashAttention: false));
+      _engine = await WhisperEngine.load(
+        modelFile.path,
+        config: const WhisperConfig(useGpu: false, useFlashAttention: false),
+      );
     }
   }
 
@@ -88,7 +105,9 @@ class OfflineSttService {
     required void Function(String sentence) onSentence,
     void Function(double level, bool speechDetected)? onVoiceActivity,
   }) async {
-    if (!await modelsReady()) throw StateError('Speech Recognition model is not installed.');
+    if (!await modelsReady()) {
+      throw StateError('Speech Recognition model is not installed.');
+    }
     await _stopStream(suppressSentenceCallbacks: true);
     await _ensureEngineLoaded();
 
@@ -108,12 +127,25 @@ class OfflineSttService {
       suppressNonSpeechTokens: true,
     ).withPerformanceMode(WhisperPerformanceMode.responsive);
 
-    _task = await _engine!.transcribeMicrophone(options: options, config: _streamConfig);
+    _task = await _engine!.transcribeMicrophone(
+      options: options,
+      config: _streamConfig,
+    );
     _listening = true;
-    _onVoiceActivity?.call(0.08, false);
-    _updates = _task!.updates.listen(_handleUpdate, onError: (Object error, StackTrace stackTrace) {
-      _lastError = error.toString();
-    });
+    _publishVoiceActivity(0.08, false);
+    _updates = _task!.updates.listen(
+      _handleUpdate,
+      onError: (Object error, StackTrace stackTrace) {
+        _lastError = error.toString();
+      },
+    );
+  }
+
+  void _publishVoiceActivity(double level, bool detected) {
+    final normalized = level.clamp(0.0, 1.0).toDouble();
+    if (micLevel.value != normalized) micLevel.value = normalized;
+    if (speechDetected.value != detected) speechDetected.value = detected;
+    _onVoiceActivity?.call(normalized, detected);
   }
 
   void _handleUpdate(WhisperStreamUpdate update) {
@@ -121,17 +153,20 @@ class OfflineSttService {
     final confirmed = update.confirmedText.replaceAll(RegExp(r'\s+'), ' ').trim();
     if (display.isNotEmpty) _onText?.call(display);
 
-    // Whisper streaming does not expose raw PCM amplitude. Treat stable token
-    // activity as VAD and derive a smooth visual level from transcript growth.
-    // This keeps endpointing tied to actual recognized speech, not room noise.
-    final speechDetected = display.isNotEmpty && display != _latestText;
-    if (speechDetected) {
+    // whisper.cpp streaming does not currently surface raw PCM amplitude in
+    // this wrapper. Stable recognition activity is therefore used as VAD and
+    // converted to a normalized visual level. It intentionally ignores room
+    // noise that produces no speech tokens.
+    final detected = display.isNotEmpty && display != _latestText;
+    if (detected) {
       final growth = (display.length - _latestText.length).abs();
-      final level = (0.28 + (growth.clamp(1, 18) / 18.0) * 0.72).clamp(0.0, 1.0);
-      _onVoiceActivity?.call(level, true);
+      final level = (0.28 + (growth.clamp(1, 18) / 18.0) * 0.72)
+          .clamp(0.0, 1.0)
+          .toDouble();
+      _publishVoiceActivity(level, true);
       _activityDecayTimer?.cancel();
       _activityDecayTimer = Timer(const Duration(milliseconds: 240), () {
-        if (_listening) _onVoiceActivity?.call(0.10, false);
+        if (_listening) _publishVoiceActivity(0.10, false);
       });
     }
 
@@ -156,7 +191,7 @@ class OfflineSttService {
     if (!SentenceEndpointDetector.isSubstantial(sentence)) return;
     _sentenceEmitted = true;
     _sentenceTimer?.cancel();
-    _onVoiceActivity?.call(0.0, false);
+    _publishVoiceActivity(0.0, false);
     scheduleMicrotask(() => _onSentence?.call(sentence));
   }
 
@@ -178,16 +213,23 @@ class OfflineSttService {
     _activityDecayTimer?.cancel();
     _activityDecayTimer = null;
     _suppressSentenceCallbacks = suppressSentenceCallbacks;
+
     final task = _task;
     if (task != null) {
       try {
         final finalUpdate = await task.stop();
         final finalText = finalUpdate.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (finalText.isNotEmpty) { _latestText = finalText; _onText?.call(finalText); }
-      } catch (e) { _lastError ??= e.toString(); }
+        if (finalText.isNotEmpty) {
+          _latestText = finalText;
+          _onText?.call(finalText);
+        }
+      } catch (e) {
+        _lastError ??= e.toString();
+      }
     }
+
     _listening = false;
-    _onVoiceActivity?.call(0.0, false);
+    _publishVoiceActivity(0.0, false);
     await _updates?.cancel();
     _updates = null;
     _task = null;
@@ -199,11 +241,18 @@ class OfflineSttService {
   }
 
   Future<void> releaseRuntime() async {
-    try { await _stopStream(suppressSentenceCallbacks: true); }
-    finally { _engine?.dispose(); _engine = null; }
+    try {
+      await _stopStream(suppressSentenceCallbacks: true);
+    } finally {
+      _engine?.dispose();
+      _engine = null;
+    }
   }
 
-  Future<void> dispose() async { await releaseRuntime(); _models.close(); }
+  Future<void> dispose() async {
+    await releaseRuntime();
+    _models.close();
+  }
 
   String _whisperLanguageCode(String languageTag) {
     final normalized = languageTag.trim().toLowerCase();
