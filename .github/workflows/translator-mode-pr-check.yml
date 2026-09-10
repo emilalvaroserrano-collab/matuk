@@ -1,0 +1,72 @@
+name: Translator Mode PR Check
+
+on:
+  pull_request:
+    paths:
+      - 'Translator Mode/**'
+      - '.github/workflows/translator-mode-pr-check.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Verify no cloud generative AI runtime
+        run: |
+          if grep -R -n -E '@google/genai|google_generative_ai|generativelanguage\.googleapis\.com|google\.generativeai' "Translator Mode/lib" "Translator Mode/pubspec.yaml"; then
+            echo 'ERROR: cloud generative AI dependency/endpoint found in local Translator Mode runtime'
+            exit 1
+          fi
+
+      - name: Bootstrap platforms
+        working-directory: Translator Mode
+        run: |
+          chmod +x scripts/bootstrap_platforms.sh
+          ./scripts/bootstrap_platforms.sh
+
+      - name: Flutter analyze
+        working-directory: Translator Mode
+        run: flutter analyze --no-fatal-infos
+
+      - name: Flutter tests
+        working-directory: Translator Mode
+        run: flutter test
+
+      - name: Build Android release APK
+        working-directory: Translator Mode
+        run: flutter build apk --release
+
+      - name: Verify APK exists
+        working-directory: Translator Mode
+        run: |
+          test -f build/app/outputs/flutter-apk/app-release.apk
+          ls -lh build/app/outputs/flutter-apk/app-release.apk
+          sha256sum build/app/outputs/flutter-apk/app-release.apk
+
+      - name: Upload validation APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: dual-translate-local-realtime-pr
+          path: Translator Mode/build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 7
