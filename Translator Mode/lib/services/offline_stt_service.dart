@@ -7,28 +7,24 @@ import '../core/sentence_endpoint_detector.dart';
 
 class OfflineSttService {
   static const WhisperModelDescriptor _model = WhisperModelCatalog.base;
-
-  // The reference live translator sends ~128 ms PCM chunks and keeps a
-  // continuous session. Whisper needs a little more audio per decode, but a
-  // 500 ms inference cadence keeps the UI responsive without translating
-  // unstable partial words.
   static const WhisperStreamConfig _streamConfig = WhisperStreamConfig(
-    updateInterval: Duration(milliseconds: 500),
+    updateInterval: Duration(milliseconds: 320),
     windowDuration: Duration(seconds: 12),
-    confirmationLag: Duration(milliseconds: 1000),
+    confirmationLag: Duration(milliseconds: 650),
   );
-  static const Duration _punctuatedEndpointDelay = Duration(milliseconds: 450);
-  static const Duration _silenceEndpointDelay = Duration(milliseconds: 1100);
+  static const Duration _punctuatedEndpointDelay = Duration(milliseconds: 260);
+  static const Duration _vadSilenceEndpointDelay = Duration(milliseconds: 720);
 
   final WhisperModelManager _models = WhisperModelManager();
-
   WhisperEngine? _engine;
   WhisperStreamTask? _task;
   StreamSubscription<WhisperStreamUpdate>? _updates;
   Timer? _sentenceTimer;
+  Timer? _activityDecayTimer;
 
   void Function(String text)? _onText;
   void Function(String sentence)? _onSentence;
+  void Function(double level, bool speechDetected)? _onVoiceActivity;
 
   String _languageTag = 'auto';
   String _latestText = '';
@@ -40,9 +36,7 @@ class OfflineSttService {
   bool get runtimeLoaded => _engine != null;
   bool get listening => _listening;
 
-  void setLanguageTag(String languageTag) {
-    _languageTag = languageTag;
-  }
+  void setLanguageTag(String languageTag) => _languageTag = languageTag;
 
   Future<File?> _verifiedModel() async {
     try {
@@ -57,18 +51,12 @@ class OfflineSttService {
 
   Future<void> prepare({required void Function(double progress) onProgress}) async {
     final cached = await _verifiedModel();
-    if (cached != null) {
-      onProgress(1);
-      return;
-    }
-
+    if (cached != null) { onProgress(1); return; }
     onProgress(0.01);
     await for (final progress in _models.downloadCatalogModel(_model)) {
       onProgress((progress.fraction ?? 0.0).clamp(0.0, 1.0));
     }
-
-    final verified = await _verifiedModel();
-    if (verified == null) {
+    if (await _verifiedModel() == null) {
       throw StateError('Speech Recognition model download did not verify.');
     }
     onProgress(1);
@@ -76,9 +64,7 @@ class OfflineSttService {
 
   Future<void> initialize({void Function(double progress)? onProgress}) async {
     onProgress?.call(0.1);
-    if (!await modelsReady()) {
-      throw StateError('Speech Recognition model is not installed.');
-    }
+    if (!await modelsReady()) throw StateError('Speech Recognition model is not installed.');
     onProgress?.call(1);
   }
 
@@ -87,44 +73,28 @@ class OfflineSttService {
   Future<void> _ensureEngineLoaded() async {
     if (_engine != null) return;
     final modelFile = await _verifiedModel();
-    if (modelFile == null) {
-      throw StateError('Speech Recognition model is not installed.');
-    }
-
+    if (modelFile == null) throw StateError('Speech Recognition model is not installed.');
     try {
-      _engine = await WhisperEngine.load(
-        modelFile.path,
-        config: const WhisperConfig(
-          useGpu: true,
-          useFlashAttention: true,
-        ),
-      );
+      _engine = await WhisperEngine.load(modelFile.path,
+          config: const WhisperConfig(useGpu: true, useFlashAttention: true));
     } catch (_) {
-      _engine = await WhisperEngine.load(
-        modelFile.path,
-        config: const WhisperConfig(
-          useGpu: false,
-          useFlashAttention: false,
-        ),
-      );
+      _engine = await WhisperEngine.load(modelFile.path,
+          config: const WhisperConfig(useGpu: false, useFlashAttention: false));
     }
   }
 
   Future<void> startListening(
     void Function(String text) onText, {
     required void Function(String sentence) onSentence,
+    void Function(double level, bool speechDetected)? onVoiceActivity,
   }) async {
-    if (!await modelsReady()) {
-      throw StateError('Speech Recognition model is not installed.');
-    }
-
-    // Stop only the active microphone stream. Keep the Whisper model loaded so
-    // the next turn resumes without model startup latency.
+    if (!await modelsReady()) throw StateError('Speech Recognition model is not installed.');
     await _stopStream(suppressSentenceCallbacks: true);
     await _ensureEngineLoaded();
 
     _onText = onText;
     _onSentence = onSentence;
+    _onVoiceActivity = onVoiceActivity;
     _latestText = '';
     _lastError = null;
     _sentenceEmitted = false;
@@ -138,44 +108,45 @@ class OfflineSttService {
       suppressNonSpeechTokens: true,
     ).withPerformanceMode(WhisperPerformanceMode.responsive);
 
-    final task = await _engine!.transcribeMicrophone(
-      options: options,
-      config: _streamConfig,
-    );
-    _task = task;
+    _task = await _engine!.transcribeMicrophone(options: options, config: _streamConfig);
     _listening = true;
-
-    _updates = task.updates.listen(
-      _handleUpdate,
-      onError: (Object error, StackTrace stackTrace) {
-        _lastError = error.toString();
-      },
-    );
+    _onVoiceActivity?.call(0.08, false);
+    _updates = _task!.updates.listen(_handleUpdate, onError: (Object error, StackTrace stackTrace) {
+      _lastError = error.toString();
+    });
   }
 
   void _handleUpdate(WhisperStreamUpdate update) {
     final display = update.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-    if (display.isNotEmpty) {
-      _onText?.call(display);
+    final confirmed = update.confirmedText.replaceAll(RegExp(r'\s+'), ' ').trim();
+    if (display.isNotEmpty) _onText?.call(display);
+
+    // Whisper streaming does not expose raw PCM amplitude. Treat stable token
+    // activity as VAD and derive a smooth visual level from transcript growth.
+    // This keeps endpointing tied to actual recognized speech, not room noise.
+    final speechDetected = display.isNotEmpty && display != _latestText;
+    if (speechDetected) {
+      final growth = (display.length - _latestText.length).abs();
+      final level = (0.28 + (growth.clamp(1, 18) / 18.0) * 0.72).clamp(0.0, 1.0);
+      _onVoiceActivity?.call(level, true);
+      _activityDecayTimer?.cancel();
+      _activityDecayTimer = Timer(const Duration(milliseconds: 240), () {
+        if (_listening) _onVoiceActivity?.call(0.10, false);
+      });
     }
 
     if (_suppressSentenceCallbacks || _sentenceEmitted || !_listening) return;
-    if (!SentenceEndpointDetector.isSubstantial(display)) return;
+    final candidate = confirmed.isNotEmpty ? confirmed : display;
+    if (!SentenceEndpointDetector.isSubstantial(candidate)) return;
 
     if (display != _latestText) {
       _latestText = display;
       _sentenceTimer?.cancel();
-      final stableText = update.confirmedText.trim().isNotEmpty
-          ? update.confirmedText
-          : display;
-      final delay = SentenceEndpointDetector.endsWithTerminalPunctuation(
-        stableText,
-      )
+      final delay = SentenceEndpointDetector.endsWithTerminalPunctuation(candidate)
           ? _punctuatedEndpointDelay
-          : _silenceEndpointDelay;
+          : _vadSilenceEndpointDelay;
       _sentenceTimer = Timer(delay, _emitLatestSentence);
     }
-
     if (update.isFinal) _emitLatestSentence();
   }
 
@@ -185,10 +156,10 @@ class OfflineSttService {
     if (!SentenceEndpointDetector.isSubstantial(sentence)) return;
     _sentenceEmitted = true;
     _sentenceTimer?.cancel();
+    _onVoiceActivity?.call(0.0, false);
     scheduleMicrotask(() => _onSentence?.call(sentence));
   }
 
-  /// Pauses microphone capture while retaining the loaded Whisper model.
   Future<String> pauseListening() async {
     final before = _latestText.trim();
     await _stopStream(suppressSentenceCallbacks: true);
@@ -199,59 +170,45 @@ class OfflineSttService {
     return after.isNotEmpty ? after : before;
   }
 
-  Future<void> stopListening() async {
-    await pauseListening();
-  }
+  Future<void> stopListening() async => pauseListening();
 
   Future<void> _stopStream({required bool suppressSentenceCallbacks}) async {
     _sentenceTimer?.cancel();
     _sentenceTimer = null;
+    _activityDecayTimer?.cancel();
+    _activityDecayTimer = null;
     _suppressSentenceCallbacks = suppressSentenceCallbacks;
-
     final task = _task;
     if (task != null) {
       try {
         final finalUpdate = await task.stop();
         final finalText = finalUpdate.text.replaceAll(RegExp(r'\s+'), ' ').trim();
-        if (finalText.isNotEmpty) {
-          _latestText = finalText;
-          _onText?.call(finalText);
-        }
-      } catch (e) {
-        _lastError ??= e.toString();
-      }
+        if (finalText.isNotEmpty) { _latestText = finalText; _onText?.call(finalText); }
+      } catch (e) { _lastError ??= e.toString(); }
     }
-
     _listening = false;
+    _onVoiceActivity?.call(0.0, false);
     await _updates?.cancel();
     _updates = null;
     _task = null;
     _onText = null;
     _onSentence = null;
+    _onVoiceActivity = null;
     _sentenceEmitted = false;
     _suppressSentenceCallbacks = false;
   }
 
   Future<void> releaseRuntime() async {
-    try {
-      await _stopStream(suppressSentenceCallbacks: true);
-    } finally {
-      _engine?.dispose();
-      _engine = null;
-    }
+    try { await _stopStream(suppressSentenceCallbacks: true); }
+    finally { _engine?.dispose(); _engine = null; }
   }
 
-  Future<void> dispose() async {
-    await releaseRuntime();
-    _models.close();
-  }
+  Future<void> dispose() async { await releaseRuntime(); _models.close(); }
 
   String _whisperLanguageCode(String languageTag) {
     final normalized = languageTag.trim().toLowerCase();
     if (normalized.isEmpty || normalized == 'auto') return 'auto';
-    if (normalized.startsWith('fil') || normalized.startsWith('tl')) {
-      return 'tl';
-    }
+    if (normalized.startsWith('fil') || normalized.startsWith('tl')) return 'tl';
     if (normalized.startsWith('nl')) return 'nl';
     if (normalized.startsWith('en')) return 'en';
     if (normalized.startsWith('fr')) return 'fr';
