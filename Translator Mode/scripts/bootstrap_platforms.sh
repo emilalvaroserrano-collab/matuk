@@ -20,6 +20,11 @@ cp -R "$TMP/matuk_translator_mode/android" "$ROOT/android"
 python3 "$ROOT/scripts/apply_platform_config.py" "$ROOT"
 cd "$ROOT"
 flutter pub get
+
+# Generate standard and Android adaptive launcher icons from the repository logo.
+test -f "1976-removebg-preview.png"
+dart run flutter_launcher_icons
+
 dart format lib test
 # Compiler/analyzer errors and warnings remain fatal. Pure style/info lints do
 # not block a release build; they are still printed in CI for cleanup.
