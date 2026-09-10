@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'controllers/translator_controller.dart';
 import 'core/app_theme.dart';
-import 'screens/reference_style_translator_screen.dart';
+import 'screens/local_realtime_translator_screen.dart';
 
 class TranslatorModeApp extends StatefulWidget {
   const TranslatorModeApp({super.key});
@@ -35,7 +35,7 @@ class _TranslatorModeAppState extends State<TranslatorModeApp> {
       debugShowCheckedModeBanner: false,
       title: 'Dual Translate',
       theme: AppTheme.dark(),
-      home: ReferenceStyleTranslatorScreen(controller: _controller),
+      home: LocalRealtimeTranslatorScreen(controller: _controller),
     );
   }
 }
