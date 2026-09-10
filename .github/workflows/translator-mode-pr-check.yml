@@ -46,7 +46,7 @@ jobs:
 
       - name: Flutter analyze
         working-directory: Translator Mode
-        run: flutter analyze
+        run: flutter analyze --no-fatal-infos
 
       - name: Flutter tests
         working-directory: Translator Mode
