@@ -1,0 +1,1 @@
+MATUK Android launcher icons are generated from 1976-removebg-preview.png during CI bootstrap.
